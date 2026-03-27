@@ -5,3 +5,7 @@ node_modules/
 /tmp/
 cache/
 artifacts/
+
+# TLS credentials
+captive-portal/tls.key
+captive-portal/tls.crt

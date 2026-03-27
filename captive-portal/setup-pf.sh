@@ -29,23 +29,40 @@ fi
 
 BRIDGE=""
 PORTAL_IP=""
+FALLBACK_BRIDGE=""
+FALLBACK_IP=""
 
 echo "Scanning network interfaces..."
 
-# Try all bridge* interfaces (bridge0, bridge100, bridge101, etc.)
-for iface in $(ifconfig -l 2>/dev/null | tr ' ' '\n' | grep '^bridge' | sort); do
-  # Try ipconfig first, fall back to parsing ifconfig output directly
-  ip=$(ipconfig getifaddr "$iface" 2>/dev/null || true)
-  if [ -z "$ip" ]; then
-    ip=$(ifconfig "$iface" 2>/dev/null | awk '/inet /{print $2}' | head -1)
+# Prefer the active Internet Sharing bridge. Some Macs keep older inactive
+# bridge interfaces around, and picking the first one breaks the captive rules.
+for iface in bridge100 bridge101 bridge0 $(ifconfig -l 2>/dev/null | tr ' ' '\n' | grep '^bridge' | sort); do
+  [ -n "$iface" ] || continue
+
+  info=$(ifconfig "$iface" 2>/dev/null || true)
+  [ -n "$info" ] || continue
+
+  ip=$(printf '%s\n' "$info" | awk '/inet /{print $2; exit}')
+  status=$(printf '%s\n' "$info" | awk '/status:/{print $2; exit}')
+
+  echo "  $iface → ${ip:-no IP} (${status:-unknown})"
+
+  if [ -n "$ip" ] && [ -z "$FALLBACK_BRIDGE" ]; then
+    FALLBACK_BRIDGE="$iface"
+    FALLBACK_IP="$ip"
   fi
-  echo "  $iface → ${ip:-no IP}"
-  if [ -n "$ip" ]; then
+
+  if [ -n "$ip" ] && [ "$status" = "active" ]; then
     BRIDGE="$iface"
     PORTAL_IP="$ip"
     break
   fi
 done
+
+if [ -z "$BRIDGE" ] && [ -n "$FALLBACK_BRIDGE" ]; then
+  BRIDGE="$FALLBACK_BRIDGE"
+  PORTAL_IP="$FALLBACK_IP"
+fi
 
 if [ -z "$BRIDGE" ]; then
   echo ""
@@ -67,6 +84,8 @@ fi
 
 echo "Bridge interface : $BRIDGE"
 echo "Portal IP        : $PORTAL_IP"
+HOTSPOT_SUBNET="${PORTAL_IP%.*}.0/24"
+echo "Hotspot subnet   : $HOTSPOT_SUBNET"
 
 # ── Write NAT anchor (redirect rules) ─────────────────────────────────────────
 
@@ -82,6 +101,11 @@ rdr pass on $BRIDGE proto udp from any to any port 53 -> $PORTAL_IP port 5300
 # resolves every domain to PORTAL_IP — so the iPhone's HTTP request to
 # captive.apple.com already has destination PORTAL_IP:80.
 rdr pass on $BRIDGE proto tcp from any to any port 80 -> $PORTAL_IP port 8888
+
+# Redirect ALL HTTPS (port 443) to our HTTPS portal server.
+# iOS 14+ and macOS probe https://captive.apple.com — without this redirect
+# the TLS handshake times out and the device may suppress the captive portal popup.
+rdr pass on $BRIDGE proto tcp from any to any port 443 -> $PORTAL_IP port 8443
 EOF
 
 echo "Written: $NAT_ANCHOR"
@@ -97,20 +121,28 @@ cat > "$FILTER_ANCHOR" << EOF
 # via: pfctl -t allowed_clients -T add <ip>
 table <allowed_clients> persist
 table <portal_host>     const { $PORTAL_IP }
+table <hotspot_net>     const { $HOTSPOT_SUBNET }
 
 # Allow DHCP so devices can get an IP address
-pass in quick on $BRIDGE proto udp from any port 68 to any port 67
+pass in quick on $BRIDGE proto udp from <hotspot_net> port 68 to any port 67 keep state
 
-# Allow traffic to the portal server itself (payment page + control API)
-pass in quick on $BRIDGE proto tcp from any to <portal_host> port { 8888, 3001, 3000 }
-pass in quick on $BRIDGE proto udp from any to <portal_host> port 5300
+# Unpaid devices must stay on IPv4 so they cannot bypass the captive redirects.
+block drop quick inet6 from <hotspot_net> to any
+block drop quick inet6 from any to <hotspot_net>
+
+# Allow traffic to the portal server itself (payment page + control API).
+# These rules are the only unpaid paths out of the hotspot network.
+pass quick inet proto tcp from <hotspot_net> to <portal_host> port { 8443, 8888, 3001, 3000 } keep state
+pass quick inet proto udp from <hotspot_net> to <portal_host> port 5300 keep state
 
 # Allow paid clients full outbound internet
-pass in  quick on $BRIDGE from <allowed_clients> to any
-pass out quick on $BRIDGE to   <allowed_clients>
+pass quick inet from <allowed_clients> to any keep state
+pass quick inet from any to <allowed_clients> keep state
 
-# Block everything else from unpaid clients
-block in quick on $BRIDGE all
+# Block everything else from unpaid hotspot clients everywhere, not just on
+# bridge0. This prevents a joined device from roaming freely before payment.
+block return quick inet from <hotspot_net> to any
+block drop   quick inet from any to <hotspot_net>
 EOF
 
 echo "Written: $FILTER_ANCHOR"

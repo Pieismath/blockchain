@@ -68,6 +68,19 @@ const sessions = {};
 //          signalStrength, host, hostIp, portalUrl, createdAt }
 const listings = [];
 
+function normalizeSSID(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+
+  const withoutPrefix = trimmed
+    .replace(/^\u26a1\s*/u, "")
+    .replace(/^HDX[-\s]*/i, "")
+    .replace(/^hotspotdex[-\s]*/i, "");
+
+  const slug = withoutPrefix.replace(/[^a-zA-Z0-9]/g, "").slice(0, 16);
+  return slug ? `⚡HDX-${slug}` : "";
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Return true if the session exists and has not expired yet. */
@@ -328,7 +341,9 @@ app.get("/listings", (req, res) => {
 /** POST /listings — register a new hotspot */
 app.post("/listings", (req, res) => {
   const { name, ssid, location, pricePerMinute, uploadMbps, downloadMbps, signalStrength, host, hostIp } = req.body;
-  if (!name || !ssid || !pricePerMinute) {
+  const normalizedSsid = normalizeSSID(ssid || name);
+
+  if (!name || !normalizedSsid || !pricePerMinute) {
     return res.status(400).json({ error: "name, ssid, and pricePerMinute are required" });
   }
   const id = "hs-" + Date.now();
@@ -336,7 +351,7 @@ app.post("/listings", (req, res) => {
   const listing = {
     id,
     name,
-    ssid,
+    ssid: normalizedSsid,
     location: location || "Unknown location",
     pricePerMinute: Number(pricePerMinute),
     uploadMbps: Number(uploadMbps) || 50,
@@ -349,7 +364,7 @@ app.post("/listings", (req, res) => {
     createdAt: new Date().toISOString(),
   };
   listings.push(listing);
-  console.log(`[${ts()}] LISTING CREATED | ${name} | SSID: ${ssid} | ${pricePerMinute} ETH/min`);
+  console.log(`[${ts()}] LISTING CREATED | ${name} | SSID: ${normalizedSsid} | ${pricePerMinute} ETH/min`);
   res.status(201).json(listing);
 });
 

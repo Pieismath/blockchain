@@ -14,6 +14,7 @@ import { useState } from "react";
 import { createListing } from "@/lib/api";
 import type { HotspotListing } from "@/lib/types";
 import QrCode from "@/components/QrCode";
+import { buildHotspotSsid, normalizeHotspotSsid, SSID_PREFIX } from "@/lib/ssid";
 
 type Phase = "form" | "submitting" | "done";
 
@@ -34,19 +35,15 @@ export default function HostPage() {
     hostIp: "",
   });
 
-  // Auto-generate SSID from name so it shows up recognizably in WiFi settings
-  function autoSSID(name: string): string {
-    const slug = name.replace(/[^a-zA-Z0-9]/g, "").slice(0, 16);
-    return slug ? `⚡HDX-${slug}` : "";
-  }
-
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const val = e.target.value;
     setForm((f) => {
       const next = { ...f, [k]: val };
-      // Auto-generate SSID when name changes (unless user manually edited SSID)
-      if (k === "name" && (f.ssid === "" || f.ssid === autoSSID(f.name))) {
-        next.ssid = autoSSID(val);
+      if (k === "name") {
+        next.ssid = buildHotspotSsid(val);
+      }
+      if (k === "ssid") {
+        next.ssid = normalizeHotspotSsid(val);
       }
       return next;
     });
@@ -149,7 +146,7 @@ export default function HostPage() {
       {/* How it works */}
       <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-xl p-4 mb-6 text-sm text-indigo-300 space-y-2">
         <p className="font-semibold text-indigo-200">How buyers find you</p>
-        <p>Your hotspot appears as <strong className="text-white font-mono">⚡HDX-YourName</strong> in their WiFi settings. When they connect, a payment page pops up automatically — just like airport WiFi.</p>
+        <p>Your hotspot appears as <strong className="text-white font-mono">{SSID_PREFIX}YourName</strong> in their WiFi settings. The branded prefix is added automatically so buyers can recognize leasable networks instantly.</p>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-4">
@@ -168,11 +165,11 @@ export default function HostPage() {
             required
             value={form.ssid}
             onChange={set("ssid")}
-            placeholder="⚡HDX-CafeNova"
+            placeholder={`${SSID_PREFIX}CafeNova`}
             className={inputCls}
           />
           <p className="text-xs text-slate-600 mt-1">
-            Tip: All ⚡HDX- networks are recognizable as rentable hotspots
+            Tip: the {SSID_PREFIX} prefix is always added for you, even if you type a plain hotspot name.
           </p>
         </Field>
 

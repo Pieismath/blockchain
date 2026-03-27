@@ -29,6 +29,7 @@
 const express   = require("express");
 const cors      = require("cors");
 const path      = require("path");
+const https     = require("https");
 const { v4: uuidv4 } = require("uuid");
 const { execSync, exec } = require("child_process");
 const { randomBytes } = require("crypto");
@@ -38,7 +39,8 @@ const { Packet } = dns2;
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-const HTTP_PORT = 8888;   // pf rdr :80  → :8888
+const HTTP_PORT  = 8888;   // pf rdr :80  → :8888
+const HTTPS_PORT = 8443;   // pf rdr :443 → :8443
 const DNS_PORT  = 5300;   // pf rdr :53  → :5300
 const CONTROL_API  = process.env.CONTROL_API  ?? "http://localhost:3001";
 const RATE_PER_MIN = parseFloat(process.env.RATE_PER_MIN ?? "0.001"); // SOL per minute
@@ -63,21 +65,38 @@ const HOTSPOT_CONFIG = {
 
 /** Detect the Mac's IP on the shared bridge (Internet Sharing interface). */
 function detectPortalIP() {
-  for (const iface of ["bridge0", "bridge100", "bridge101", "en0"]) {
+  const listed = execSync("ifconfig -l 2>/dev/null", { encoding: "utf8" })
+    .trim()
+    .split(/\s+/)
+    .filter((iface) => iface.startsWith("bridge"));
+  const ordered = ["bridge100", "bridge101", "bridge0", ...listed];
+
+  let fallbackIp = null;
+
+  for (const iface of ordered) {
     try {
-      // Try ipconfig first
-      let ip = execSync(`ipconfig getifaddr ${iface} 2>/dev/null`, { encoding: "utf8" }).trim();
-      if (ip) { console.log(`[Portal] Detected portal IP ${ip} on ${iface}`); return ip; }
-    } catch { /* try next */ }
-    try {
-      // Fall back to parsing ifconfig (picks up manually-assigned IPs)
       const out = execSync(`ifconfig ${iface} 2>/dev/null`, { encoding: "utf8" });
-      const m = out.match(/inet (\d+\.\d+\.\d+\.\d+)/);
-      if (m) { console.log(`[Portal] Detected portal IP ${m[1]} on ${iface} (ifconfig)`); return m[1]; }
-    } catch { /* try next */ }
+      const ip = out.match(/inet (\d+\.\d+\.\d+\.\d+)/)?.[1];
+      const status = out.match(/status: (\w+)/)?.[1];
+      if (!ip) continue;
+
+      if (!fallbackIp) fallbackIp = ip;
+      if (status === "active") {
+        console.log(`[Portal] Detected portal IP ${ip} on ${iface} (${status})`);
+        return ip;
+      }
+    } catch {
+      // try next interface
+    }
   }
-  console.warn("[Portal] Could not detect bridge IP — defaulting to 192.168.3.1");
-  return "192.168.3.1";
+
+  if (fallbackIp) {
+    console.warn(`[Portal] No active bridge detected — falling back to ${fallbackIp}`);
+    return fallbackIp;
+  }
+
+  console.warn("[Portal] Could not detect bridge IP — defaulting to 192.168.2.1");
+  return "192.168.2.1";
 }
 
 const PORTAL_IP = process.env.PORTAL_IP ?? detectPortalIP();
@@ -171,6 +190,18 @@ function clientIP(req) {
   const raw = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "";
   return raw.split(",")[0].trim().replace(/^::ffff:/, "");
 }
+
+function redirectToPortal(res) {
+  res.redirect(302, `http://${PORTAL_IP}/`);
+}
+
+// ── Request logger — helps diagnose which probe URLs devices are hitting ───────
+app.use((req, res, next) => {
+  const ip   = clientIP(req);
+  const paid = paidIPs.has(ip) ? "[PAID]" : "[UNPAID]";
+  console.log(`[HTTP] ${paid} ${ip} ${req.method} ${req.headers.host || ""}${req.url} UA:${(req.headers["user-agent"] || "").slice(0, 60)}`);
+  next();
+});
 
 // ── GET /config — serve hotspot info to the payment page ──────────────────────
 app.get("/config", (req, res) => {
@@ -278,38 +309,78 @@ app.get("/payment-status", async (req, res) => {
   }
 });
 
-// ── Apple captive-portal detection endpoints ──────────────────────────────────
+// ── Captive-portal probe endpoints ────────────────────────────────────────────
 //
-// iOS makes a GET to one of these after connecting to a new network.
-// Expected response for an OPEN network: 200 with body "Success".
-// Anything else (redirect, wrong body) → iOS opens the CNA popup.
+// These paths are probed by iOS/macOS/Android/Windows immediately after joining
+// a new network. We must respond correctly for each OS to trigger the portal:
+//
+//   • Unpaid → 302 redirect to the payment page  → OS opens captive portal popup
+//   • Paid   → 200 "Success" / 204 No Content    → OS considers network open
+//
+// IMPORTANT: All domains are DNS-resolved to PORTAL_IP, so the Host header
+// will differ but the path is what matters.
 
+// Apple (iOS / macOS / tvOS)
+// iOS 7-13: http://captive.apple.com/hotspot-detect.html
+// iOS 14+ : https://captive.apple.com/hotspot-detect.html  ← hits HTTPS_PORT
+// macOS   : same URLs + /library/test/success.html
 const APPLE_PROBES = [
   "/hotspot-detect.html",
+  "/hotspotdetect.html",
   "/library/test/success.html",
   "/success.html",
-  "/hotspotdetect.html",
+  "/canonical.html",
+  // Older Apple endpoint (query string is ignored by Express route matching)
+  "/bag",
 ];
 
-app.get(APPLE_PROBES, (req, res) => {
+function appleProbeResponse(req, res) {
   const ip = clientIP(req);
   if (paidIPs.has(ip)) {
-    // Tell iOS the network is open → CNA closes automatically
     res.set("Content-Type", "text/html");
     res.send("<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
   } else {
-    // Redirect to payment page → iOS opens CNA showing our page
-    res.redirect(302, `http://${PORTAL_IP}:${HTTP_PORT}/`);
+    // Redirect to portal via port 80 — pf will rdr it to 8888.
+    // Using port 80 produces a cleaner URL in the iOS CNA popup browser.
+    redirectToPortal(res);
   }
-});
+}
 
-// ── Android captive-portal detection ─────────────────────────────────────────
-app.get(["/generate_204", "/gen_204"], (req, res) => {
+app.all(APPLE_PROBES, appleProbeResponse);
+
+// Android (all versions) + Chrome OS
+// connectivitycheck.gstatic.com, connectivitycheck.android.com,
+// clients3.google.com, play.googleapis.com — all DNS-resolved to PORTAL_IP
+app.all(["/generate_204", "/gen_204", "/generate204", "/connectivity-check.html"], (req, res) => {
   const ip = clientIP(req);
   if (paidIPs.has(ip)) {
     res.status(204).send();
   } else {
-    res.redirect(302, `http://${PORTAL_IP}:${HTTP_PORT}/`);
+    redirectToPortal(res);
+  }
+});
+
+// Windows (NCA — Network Connectivity Assistant)
+// http://www.msftconnecttest.com/connecttest.txt  (Windows 10+)
+// http://www.msftncsi.com/ncsi.txt               (Windows 7/8)
+app.all(["/connecttest.txt", "/ncsi.txt", "/redirect"], (req, res) => {
+  const ip = clientIP(req);
+  if (paidIPs.has(ip)) {
+    res.set("Content-Type", "text/plain");
+    res.send("Microsoft Connect Test");
+  } else {
+    redirectToPortal(res);
+  }
+});
+
+// Kindle Fire / Amazon devices
+app.get(["/kindle-wifi/wifistub.html", "/kindle-wifi/wifiredirect.html"], (req, res) => {
+  const ip = clientIP(req);
+  if (paidIPs.has(ip)) {
+    res.set("Content-Type", "text/html");
+    res.send("<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
+  } else {
+    redirectToPortal(res);
   }
 });
 
@@ -404,14 +475,53 @@ app.get("*", (req, res) => {
     return res.send("<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
   }
 
-  // Unpaid client — redirect to payment page
-  res.redirect(302, `http://${PORTAL_IP}:${HTTP_PORT}/`);
+  // Unpaid client — redirect to payment page via port 80 (pf re-intercepts → 8888)
+  res.redirect(302, `http://${PORTAL_IP}/`);
 });
 
 app.listen(HTTP_PORT, "0.0.0.0", () => {
   console.log(`[Portal] HTTP server  → port ${HTTP_PORT}`);
   console.log(`[Portal] Portal URL   → http://${PORTAL_IP}:${HTTP_PORT}`);
 });
+
+// ── HTTPS server for modern iOS/macOS captive-portal probes ───────────────────
+//
+// iOS 14+ probes https://captive.apple.com/hotspot-detect.html.
+// pf redirects :443 → :8443 (see setup-pf.sh).
+//
+// We use a self-signed cert. iOS will see a TLS cert mismatch for captive.apple.com
+// AND a non-"Success" body/redirect — both are strong captive-portal signals that
+// cause CNA to open. The cert warning never surfaces to the user because CNA
+// intercepts the request before rendering a page.
+//
+// Generate the cert once with:
+//   openssl req -x509 -newkey rsa:2048 -keyout captive-portal/tls.key \
+//     -out captive-portal/tls.crt -days 3650 -nodes \
+//     -subj "/CN=captive.apple.com"
+//
+// If the cert files don't exist the HTTPS server is skipped (HTTP-only fallback).
+
+(function startHttpsServer() {
+  const fs = require("fs");
+  const keyPath = path.join(__dirname, "tls.key");
+  const crtPath = path.join(__dirname, "tls.crt");
+
+  if (!fs.existsSync(keyPath) || !fs.existsSync(crtPath)) {
+    console.warn("[Portal] tls.key / tls.crt not found — HTTPS server skipped.");
+    console.warn("[Portal] Run: openssl req -x509 -newkey rsa:2048 -keyout captive-portal/tls.key \\");
+    console.warn("[Portal]        -out captive-portal/tls.crt -days 3650 -nodes -subj '/CN=captive.apple.com'");
+    return;
+  }
+
+  const tlsOptions = {
+    key:  fs.readFileSync(keyPath),
+    cert: fs.readFileSync(crtPath),
+  };
+
+  https.createServer(tlsOptions, app).listen(HTTPS_PORT, "0.0.0.0", () => {
+    console.log(`[Portal] HTTPS server → port ${HTTPS_PORT}`);
+  });
+})();
 
 // ─── DNS Server ───────────────────────────────────────────────────────────────
 //
@@ -454,13 +564,21 @@ const dnsServer = dns2.createServer({
 
     // ── Unpaid client → resolve everything to portal IP ──
     for (const question of request.questions) {
-      response.answers.push({
-        name:    question.name,
-        type:    Packet.TYPE.A,
-        class:   Packet.CLASS.IN,
-        ttl:     10,         // short TTL so devices don't cache the intercept
-        address: PORTAL_IP,
-      });
+      if (question.type === Packet.TYPE.AAAA) {
+        // Return NXDOMAIN-style empty answer for IPv6 to force clients onto IPv4.
+        // Without this, devices that get a valid AAAA response may connect via
+        // IPv6, bypassing pf redirect rules entirely.
+        response.header.rcode = 3; // NXDOMAIN
+        console.log(`[DNS] Blocking AAAA for ${question.name} from ${clientIP} → forcing IPv4`);
+      } else {
+        response.answers.push({
+          name:    question.name,
+          type:    Packet.TYPE.A,
+          class:   Packet.CLASS.IN,
+          ttl:     10,         // short TTL so devices don't cache the intercept
+          address: PORTAL_IP,
+        });
+      }
     }
 
     send(response);

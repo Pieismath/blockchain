@@ -113,10 +113,17 @@ done
 # ── 5. Start captive portal (iPhone mode) ─────────────────────────────────────
 PORTAL_PID=""
 if $CAPTIVE_MODE; then
-  # Enable pf and load rules so DNS (:53→:5300) and HTTP (:80→:8888) redirects work.
+  # Enable pf and load each anchor file directly (more reliable than
+  # relying on 'load anchor' inside pf.conf being re-evaluated).
   echo "Loading pf firewall rules (sudo required)..."
   sudo pfctl -e 2>/dev/null || true
-  sudo pfctl -f /etc/pf.conf 2>/dev/null && echo "pf rules loaded." || echo "pf load failed — captive portal may not intercept traffic."
+  sudo pfctl -f /etc/pf.conf 2>/dev/null || true
+  sudo pfctl -a hotspotdex-nat -f /etc/pf.anchors/hotspotdex-nat 2>/dev/null \
+    && echo "pf NAT redirect rules loaded." \
+    || echo "WARN: could not load NAT redirect rules"
+  sudo pfctl -a hotspotdex -f /etc/pf.anchors/hotspotdex 2>/dev/null \
+    && echo "pf filter rules loaded." \
+    || echo "WARN: could not load filter rules"
 
   echo "Starting captive portal (DNS :5300, HTTP :8888)..."
   (cd "$PORTAL" && \
