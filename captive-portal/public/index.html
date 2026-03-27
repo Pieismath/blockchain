@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <!--
+    maximum-scale=1 prevents iOS from zooming in on form fields,
+    which looks bad in the Captive Network Assistant browser.
+  -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>HotspotDEX</title>
+  <style>
+    /* ── Reset & base ──────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #07070f;
+      --surface:   #0f0f1a;
+      --border:    rgba(255,255,255,0.08);
+      --indigo:    #6366f1;
+      --indigo-dk: #4f46e5;
+      --green:     #34d399;
+      --red:       #f87171;
+      --text:      #e8e8f0;
+      --muted:     #64748b;
+      --radius:    16px;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px 40px;
+      min-height: 100%;
+    }
+
+    /* ── Header ────────────────────────────────────────────────────────── */
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 28px;
+    }
+    .logo-icon {
+      width: 36px;
+      height: 36px;
+      color: var(--indigo);
+    }
+    .logo-text { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
+    .logo-text span { color: var(--indigo); }
+
+    /* ── Card ──────────────────────────────────────────────────────────── */
+    .card {
+      width: 100%;
+      max-width: 400px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    .card-title {
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin-bottom: 14px;
+    }
+
+    /* ── Hotspot listing ───────────────────────────────────────────────── */
+    .hotspot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .hotspot:last-child { border-bottom: none; }
+    .hotspot-info h3 { font-size: 15px; font-weight: 600; }
+    .hotspot-info p  { font-size: 12px; color: var(--muted); margin-top: 2px; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 4px 8px;
+      border-radius: 100px;
+      background: rgba(52,211,153,0.12);
+      color: var(--green);
+    }
+    .badge-dot {
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      background: var(--green);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.4; }
+    }
+
+    /* ── Duration selector ─────────────────────────────────────────────── */
+    .duration-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+    .dur-btn {
+      padding: 14px 8px;
+      border: 2px solid var(--border);
+      border-radius: 12px;
+      background: rgba(255,255,255,0.03);
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      text-align: center;
+      -webkit-tap-highlight-color: transparent;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .dur-btn.selected {
+      border-color: var(--indigo);
+      background: rgba(99,102,241,0.15);
+      color: #a5b4fc;
+    }
+    .dur-btn .price {
+      display: block;
+      font-size: 11px;
+      font-weight: 400;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .dur-btn.selected .price { color: #818cf8; }
+
+    /* ── Cost summary ──────────────────────────────────────────────────── */
+    .summary {
+      background: rgba(255,255,255,0.03);
+      border-radius: 12px;
+      padding: 14px;
+    }
+    .summary-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 14px;
+      padding: 4px 0;
+      color: var(--muted);
+    }
+    .summary-row.total {
+      border-top: 1px solid var(--border);
+      margin-top: 8px;
+      padding-top: 12px;
+      font-weight: 700;
+      font-size: 16px;
+      color: var(--text);
+    }
+    .summary-row.total .val { color: var(--green); }
+
+    /* ── Pay button ────────────────────────────────────────────────────── */
+    .pay-btn {
+      width: 100%;
+      padding: 16px;
+      border: none;
+      border-radius: 14px;
+      background: var(--indigo);
+      color: #fff;
+      font-size: 16px;
+      font-weight: 700;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      transition: background 0.15s, transform 0.1s;
+      margin-top: 4px;
+    }
+    .pay-btn:active  { transform: scale(0.97); background: var(--indigo-dk); }
+    .pay-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+    /* ── Spinner ───────────────────────────────────────────────────────── */
+    .spinner {
+      display: inline-block;
+      width: 16px; height: 16px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Success screen ────────────────────────────────────────────────── */
+    #success-screen { display: none; width: 100%; max-width: 400px; }
+    .success-icon {
+      width: 72px; height: 72px;
+      border-radius: 50%;
+      background: rgba(52,211,153,0.12);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 20px;
+    }
+    .success-icon svg { width: 36px; height: 36px; color: var(--green); }
+    .success-title {
+      text-align: center;
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .success-sub {
+      text-align: center;
+      font-size: 14px;
+      color: var(--muted);
+      margin-bottom: 24px;
+    }
+
+    /* ── Countdown ─────────────────────────────────────────────────────── */
+    .countdown-ring {
+      width: 140px; height: 140px;
+      margin: 0 auto 20px;
+      position: relative;
+    }
+    .countdown-ring svg {
+      transform: rotate(-90deg);
+      width: 100%; height: 100%;
+    }
+    .countdown-ring circle {
+      fill: none;
+      stroke-width: 8;
+      cx: 70; cy: 70; r: 58;
+    }
+    .ring-bg    { stroke: rgba(255,255,255,0.05); }
+    .ring-prog  {
+      stroke: var(--indigo);
+      stroke-linecap: round;
+      transition: stroke-dashoffset 1s linear;
+    }
+    .countdown-text {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-size: 28px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .countdown-label { font-size: 11px; color: var(--muted); margin-top: -2px; }
+
+    /* ── Disconnect button ─────────────────────────────────────────────── */
+    .disc-btn {
+      width: 100%;
+      max-width: 400px;
+      padding: 15px;
+      border: 1px solid rgba(248,113,113,0.25);
+      border-radius: 14px;
+      background: rgba(248,113,113,0.08);
+      color: var(--red);
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* ── Refund screen ─────────────────────────────────────────────────── */
+    #refund-screen { display: none; width: 100%; max-width: 400px; text-align: center; }
+
+    /* ── Footer ────────────────────────────────────────────────────────── */
+    .footer {
+      margin-top: auto;
+      padding-top: 24px;
+      font-size: 11px;
+      color: var(--muted);
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ── Logo ──────────────────────────────────────────────────────────── -->
+  <div class="logo">
+    <svg class="logo-icon" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round">
+      <path d="M5 12.55a11 11 0 0 1 14.08 0"/>
+      <path d="M1.42 9a16 16 0 0 1 21.16 0"/>
+      <path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>
+      <circle cx="12" cy="20" r="1" fill="currentColor"/>
+    </svg>
+    <div class="logo-text">Hotspot<span>DEX</span></div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!--  PAYMENT SCREEN                                                     -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <div id="payment-screen" style="width:100%;max-width:400px;">
+
+    <!-- Hotspot listing -->
+    <div class="card">
+      <div class="card-title">Available Hotspot</div>
+      <div class="hotspot">
+        <div class="hotspot-info">
+          <h3>CafeNova Uplink</h3>
+          <p>200 Mbps · 0.01 ETH / min</p>
+        </div>
+        <div class="badge">
+          <span class="badge-dot"></span>
+          Live
+        </div>
+      </div>
+    </div>
+
+    <!-- Duration selector -->
+    <div class="card">
+      <div class="card-title">Choose Duration</div>
+      <div class="duration-grid">
+        <button class="dur-btn" data-min="5" onclick="selectDuration(5)">
+          5 min
+          <span class="price">0.05 ETH</span>
+        </button>
+        <button class="dur-btn selected" data-min="10" onclick="selectDuration(10)">
+          10 min
+          <span class="price">0.10 ETH</span>
+        </button>
+        <button class="dur-btn" data-min="30" onclick="selectDuration(30)">
+          30 min
+          <span class="price">0.30 ETH</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Cost summary -->
+    <div class="card">
+      <div class="card-title">Summary</div>
+      <div class="summary">
+        <div class="summary-row"><span>Rate</span><span>0.01 ETH / min</span></div>
+        <div class="summary-row"><span>Duration</span><span id="sum-dur">10 minutes</span></div>
+        <div class="summary-row total">
+          <span>Total</span>
+          <span class="val" id="sum-total">0.10 ETH</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Error message (hidden by default) -->
+    <div id="error-msg" style="display:none;color:#f87171;font-size:13px;
+         background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.2);
+         border-radius:10px;padding:10px 14px;margin-bottom:12px;"></div>
+
+    <!-- Pay button -->
+    <button class="pay-btn" id="pay-btn" onclick="handlePay()">
+      Pay 0.10 ETH &amp; Connect
+    </button>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!--  SUCCESS / ACTIVE SESSION SCREEN                                    -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <div id="success-screen">
+    <div class="success-icon">
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round"
+              stroke-width="2" d="M5 13l4 4L19 7"/>
+      </svg>
+    </div>
+    <div class="success-title">You're Connected!</div>
+    <div class="success-sub" id="success-sub">Session active — internet is open.</div>
+
+    <!-- Circular countdown -->
+    <div class="countdown-ring">
+      <svg viewBox="0 0 140 140">
+        <circle class="ring-bg"   cx="70" cy="70" r="58"/>
+        <circle class="ring-prog" cx="70" cy="70" r="58"
+                id="ring"
+                stroke-dasharray="364.4"
+                stroke-dashoffset="0"/>
+      </svg>
+      <div class="countdown-text">
+        <span id="timer-display">00:00</span>
+        <span class="countdown-label">remaining</span>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px;">
+      <div class="summary">
+        <div class="summary-row"><span>Session ID</span><span id="sess-id" style="font-size:11px;font-family:monospace;"></span></div>
+        <div class="summary-row"><span>Paid</span><span id="sess-paid" style="color:var(--green);"></span></div>
+      </div>
+    </div>
+
+    <button class="disc-btn" onclick="handleDisconnect()">
+      Disconnect Early &amp; Refund
+    </button>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!--  REFUND SCREEN                                                      -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <div id="refund-screen">
+    <div class="success-icon" style="background:rgba(99,102,241,0.12);">
+      <svg fill="none" stroke="#a5b4fc" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round"
+              stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/>
+      </svg>
+    </div>
+    <div class="success-title">Refund Processed</div>
+    <div class="success-sub" id="refund-sub"></div>
+
+    <div class="card">
+      <div class="summary">
+        <div class="summary-row"><span>Minutes used</span><span id="ref-used"></span></div>
+        <div class="summary-row"><span>Refund amount</span>
+          <span id="ref-amount" style="color:var(--green);"></span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    Powered by HotspotDEX · Peer-to-peer WiFi
+  </div>
+
+  <!-- ── JS ──────────────────────────────────────────────────────────── -->
+  <script>
+    'use strict';
+
+    // ── State ────────────────────────────────────────────────────────────
+    var selectedMinutes = 10;
+    var RATE = 0.01;
+    var timerInterval = null;
+    var secondsLeft   = 0;
+    var totalSeconds  = 0;
+    var CIRCUMFERENCE = 2 * Math.PI * 58; // ~364.4
+
+    // ── Duration selection ───────────────────────────────────────────────
+    function selectDuration(min) {
+      selectedMinutes = min;
+
+      // Update button styles
+      document.querySelectorAll('.dur-btn').forEach(function(btn) {
+        btn.classList.toggle('selected', parseInt(btn.dataset.min) === min);
+      });
+
+      // Update summary
+      var cost = (RATE * min).toFixed(2);
+      document.getElementById('sum-dur').textContent   = min + ' minutes';
+      document.getElementById('sum-total').textContent = cost + ' ETH';
+      document.getElementById('pay-btn').textContent   = 'Pay ' + cost + ' ETH & Connect';
+    }
+
+    // ── Pay ──────────────────────────────────────────────────────────────
+    function handlePay() {
+      var btn = document.getElementById('pay-btn');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span> Confirming…';
+      document.getElementById('error-msg').style.display = 'none';
+
+      fetch('/activate', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ minutes: selectedMinutes }),
+      })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (!data.ok) throw new Error(data.error || 'Unknown error');
+        showSuccess(data);
+      })
+      .catch(function(err) {
+        var msg = document.getElementById('error-msg');
+        msg.textContent  = 'Payment failed: ' + err.message;
+        msg.style.display = 'block';
+        btn.disabled      = false;
+        btn.textContent   = 'Pay ' + (RATE * selectedMinutes).toFixed(2) + ' ETH & Connect';
+      });
+    }
+
+    // ── Show active session ──────────────────────────────────────────────
+    function showSuccess(data) {
+      document.getElementById('payment-screen').style.display = 'none';
+      document.getElementById('success-screen').style.display = 'block';
+
+      var session = data.session;
+      document.getElementById('sess-id').textContent   = session.session_id.slice(0, 8) + '…';
+      document.getElementById('sess-paid').textContent = (RATE * selectedMinutes).toFixed(2) + ' ETH';
+      document.getElementById('success-sub').textContent =
+        selectedMinutes + ' min session active — you have internet access.';
+
+      secondsLeft  = data.seconds_granted;
+      totalSeconds = data.seconds_granted;
+      updateRing();
+      updateTimer();
+
+      timerInterval = setInterval(function() {
+        secondsLeft -= 1;
+        updateTimer();
+        updateRing();
+        if (secondsLeft <= 0) {
+          clearInterval(timerInterval);
+          showRefund(selectedMinutes, 0);
+        }
+      }, 1000);
+    }
+
+    function updateTimer() {
+      var m = String(Math.floor(Math.max(secondsLeft, 0) / 60)).padStart(2, '0');
+      var s = String(Math.max(secondsLeft, 0) % 60).padStart(2, '0');
+      document.getElementById('timer-display').textContent = m + ':' + s;
+    }
+
+    function updateRing() {
+      var pct    = totalSeconds > 0 ? secondsLeft / totalSeconds : 0;
+      var offset = CIRCUMFERENCE * (1 - pct);
+      document.getElementById('ring').setAttribute('stroke-dashoffset', offset.toFixed(1));
+    }
+
+    // ── Disconnect early ─────────────────────────────────────────────────
+    function handleDisconnect() {
+      clearInterval(timerInterval);
+
+      fetch('/disconnect', { method: 'POST' })
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        showRefund(data.minutes_used, data.refund_amount);
+      })
+      .catch(function() {
+        showRefund(selectedMinutes, 0);
+      });
+    }
+
+    function showRefund(minutesUsed, refundAmount) {
+      document.getElementById('success-screen').style.display = 'none';
+      document.getElementById('refund-screen').style.display  = 'block';
+
+      document.getElementById('ref-used').textContent   = minutesUsed + ' min';
+      document.getElementById('ref-amount').textContent = refundAmount.toFixed(4) + ' ETH';
+
+      if (refundAmount === 0) {
+        document.getElementById('refund-screen').querySelector('.success-title').textContent = 'Session Complete';
+        document.getElementById('refund-sub').textContent = 'Host received full payment. Thanks for using HotspotDEX!';
+      } else {
+        document.getElementById('refund-sub').textContent =
+          refundAmount.toFixed(4) + ' ETH has been returned to your wallet.';
+      }
+    }
+
+    // ── Init ─────────────────────────────────────────────────────────────
+    selectDuration(10);
+  </script>
+</body>
+</html>

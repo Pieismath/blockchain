@@ -1,0 +1,15 @@
+{
+  "name": "hotspot-dex-contracts",
+  "version": "1.0.0",
+  "description": "HotspotDEX escrow smart contracts (Hardhat + Solidity)",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "node": "hardhat node",
+    "deploy": "hardhat run scripts/deploy.js --network localhost"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^4.0.0",
+    "hardhat": "^2.22.0"
+  }
+}
