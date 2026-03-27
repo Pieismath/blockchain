@@ -38,7 +38,9 @@ export default function HotspotCard({ listing }: { listing: HotspotListing }) {
           </h3>
           <p className="text-sm text-slate-500 mt-0.5">{listing.location}</p>
           {listing.ssid && (
-            <p className="text-xs text-indigo-400/70 font-mono mt-1">{listing.ssid}</p>
+            <p className="text-xs text-indigo-400 font-mono mt-1 bg-indigo-500/10 inline-block px-2 py-0.5 rounded">
+              WiFi: {listing.ssid}
+            </p>
           )}
         </div>
 

@@ -127,18 +127,18 @@ const proxyServer = http.createServer((req, res) => {
 
     const acceptsHtml = (req.headers["accept"] || "").includes("text/html");
     if (acceptsHtml) {
-      // Browser request: redirect to marketplace so iPhone auto-navigates there
-      const marketplaceUrl = `http://${LOCAL_IP}:3000/marketplace`;
-      res.writeHead(302, { Location: marketplaceUrl, "Content-Type": "text/html" });
-      res.end(`<html><body>Redirecting to <a href="${marketplaceUrl}">HotspotDEX</a>…</body></html>`);
+      // Browser request: redirect to captive portal payment page
+      const portalUrl = `http://${LOCAL_IP}:8888/`;
+      res.writeHead(302, { Location: portalUrl, "Content-Type": "text/html" });
+      res.end(`<html><body>Redirecting to <a href="${portalUrl}">HotspotDEX payment</a>…</body></html>`);
     } else {
       res.writeHead(402, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({
           error: "payment_required",
-          message: `Purchase a session at http://${LOCAL_IP}:3000`,
+          message: `Connect to the ⚡HDX- WiFi network. Payment page pops up automatically.`,
+          portal: `http://${LOCAL_IP}:8888/`,
           rate_per_minute: RATE_PER_MINUTE,
-          pay_to: DEMO_WALLET,
         })
       );
     }

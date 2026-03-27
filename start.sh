@@ -22,10 +22,11 @@ PROXY="$ROOT/proxy-server"
 FRONTEND="$ROOT/frontend"
 PORTAL="$ROOT/captive-portal"
 
-# Pass --captive flag to also start the captive portal (iPhone mode)
-CAPTIVE_MODE=false
+# Captive portal is always on (it's the primary buyer flow).
+# Pass --no-captive to disable it for dev/testing only.
+CAPTIVE_MODE=true
 for arg in "$@"; do
-  [ "$arg" = "--captive" ] && CAPTIVE_MODE=true
+  [ "$arg" = "--no-captive" ] && CAPTIVE_MODE=false
 done
 
 # ── Cleanup on Ctrl+C ─────────────────────────────────────────────────────────
@@ -50,6 +51,24 @@ for dir in $DIRS; do
 done
 
 # ── 1. Start Hardhat node ─────────────────────────────────────────────────────
+# ── 0. Detect hotspot config from latest listing (if any) ────────────
+# These env vars are picked up by captive-portal/server.js
+export HOTSPOT_NAME="${HOTSPOT_NAME:-WiFi Hotspot}"
+export HOTSPOT_SSID="${HOTSPOT_SSID:-⚡HDX-Hotspot}"
+export RATE_PER_MIN="${RATE_PER_MIN:-0.001}"   # SOL per minute
+export HOTSPOT_DOWN="${HOTSPOT_DOWN:-100}"
+export HOTSPOT_UP="${HOTSPOT_UP:-50}"
+export HOTSPOT_SIGNAL="${HOTSPOT_SIGNAL:-4}"
+export HOTSPOT_LOCATION="${HOTSPOT_LOCATION:-}"
+
+# ── Solana / Phantom payment config ──────────────────────────────────────────
+# Set SOLANA_WALLET to your Phantom wallet address (base58) before running.
+# e.g.  SOLANA_WALLET=4Nd1m... ./start.sh
+# Leave blank to start without payment (portal shows a warning).
+export SOLANA_WALLET="${SOLANA_WALLET:-}"
+# Use devnet for testing, mainnet-beta for production.
+export SOLANA_RPC="${SOLANA_RPC:-https://api.devnet.solana.com}"
+
 echo "[1/3] Starting Hardhat local node on :8545..."
 (cd "$CONTRACTS" && npx hardhat node --hostname 127.0.0.1) \
   > /tmp/hardhat.log 2>&1 &
@@ -94,8 +113,23 @@ done
 # ── 5. Start captive portal (iPhone mode) ─────────────────────────────────────
 PORTAL_PID=""
 if $CAPTIVE_MODE; then
+  # Enable pf and load rules so DNS (:53→:5300) and HTTP (:80→:8888) redirects work.
+  echo "Loading pf firewall rules (sudo required)..."
+  sudo pfctl -e 2>/dev/null || true
+  sudo pfctl -f /etc/pf.conf 2>/dev/null && echo "pf rules loaded." || echo "pf load failed — captive portal may not intercept traffic."
+
   echo "Starting captive portal (DNS :5300, HTTP :8888)..."
-  (cd "$PORTAL" && node server.js) > /tmp/portal.log 2>&1 &
+  (cd "$PORTAL" && \
+    HOTSPOT_NAME="$HOTSPOT_NAME" \
+    HOTSPOT_SSID="$HOTSPOT_SSID" \
+    RATE_PER_MIN="$RATE_PER_MIN" \
+    HOTSPOT_DOWN="$HOTSPOT_DOWN" \
+    HOTSPOT_UP="$HOTSPOT_UP" \
+    HOTSPOT_SIGNAL="$HOTSPOT_SIGNAL" \
+    HOTSPOT_LOCATION="$HOTSPOT_LOCATION" \
+    SOLANA_WALLET="$SOLANA_WALLET" \
+    SOLANA_RPC="$SOLANA_RPC" \
+    node server.js) > /tmp/portal.log 2>&1 &
   PORTAL_PID=$!
   sleep 1
 fi
@@ -108,27 +142,37 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "  HotspotDEX is running"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Marketplace  →  http://localhost:3000/marketplace"
-echo "  List hotspot →  http://localhost:3000/host"
+echo "  Lease WiFi   →  http://localhost:3000/host"
 echo "  On network   →  http://$LOCAL_IP:3000"
 echo "  Control API  →  http://localhost:3001/health"
-echo "  Proxy        →  $LOCAL_IP:8080"
 echo "  Chain        →  http://localhost:8545"
 if $CAPTIVE_MODE; then
   PORTAL_IP=$(ipconfig getifaddr bridge100 2>/dev/null || echo "192.168.3.1")
   echo "  ──────────────────────────────────────────"
+  echo "  SSID         →  $HOTSPOT_SSID"
   echo "  Captive DNS  →  :5300  (pf rdr from :53)"
   echo "  Captive HTTP →  :8888  (pf rdr from :80)"
   echo "  Portal URL   →  http://$PORTAL_IP:8888"
-  echo "  iPhone page  →  pops up automatically on connect"
+  echo "  Solana RPC   →  $SOLANA_RPC"
+  if [ -n "$SOLANA_WALLET" ]; then
+    echo "  Wallet       →  ${SOLANA_WALLET:0:8}…"
+  else
+    echo "  Wallet       →  (not set — run: SOLANA_WALLET=<address> ./start.sh)"
+  fi
+  echo "  ──────────────────────────────────────────"
+  echo "  Buyers: connect to $HOTSPOT_SSID in WiFi"
+  echo "  settings → payment page pops up → pay with Phantom → online"
 fi
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "  NO ETHERNET? Use iPhone USB tethering:"
-echo "  1. Plug iPhone → Mac USB"
-echo "  2. iPhone: Settings → Personal Hotspot → on"
-echo "  3. Mac: System Settings → Sharing → Internet Sharing"
-echo "     Share from: iPhone USB  →  To: WiFi  → turn on"
-echo "  4. Run: ./start.sh --captive"
+echo "  SETUP (one-time):"
+echo "  1. Mac: System Settings → Sharing → Internet Sharing"
+echo "     Share your connection over WiFi"
+echo "  2. Set WiFi name to: $HOTSPOT_SSID"
+echo "  3. Run: sudo ./captive-portal/setup-pf.sh"
+echo ""
+echo "  Then just run ./start.sh — buyers connect to"
+echo "  your WiFi and the payment portal pops up!"
 echo ""
 echo "  Press Ctrl+C to stop everything"
 echo ""

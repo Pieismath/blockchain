@@ -5,7 +5,7 @@ export const LISTINGS: HotspotListing[] = [
   {
     id: "hs-001",
     name: "CafeNova Uplink",
-    ssid: "HDX-CafeNova",
+    ssid: "⚡HDX-CafeNova",
     location: "San Francisco, CA · Mission District",
     pricePerMinute: 0.01,
     signalStrength: 5,
@@ -19,7 +19,7 @@ export const LISTINGS: HotspotListing[] = [
   {
     id: "hs-002",
     name: "RoofTop Node #7",
-    ssid: "HDX-Rooftop7",
+    ssid: "⚡HDX-Rooftop7",
     location: "New York, NY · Lower East Side",
     pricePerMinute: 0.008,
     signalStrength: 4,
@@ -33,7 +33,7 @@ export const LISTINGS: HotspotListing[] = [
   {
     id: "hs-003",
     name: "Harbor Bridge WiFi",
-    ssid: "HDX-Harbor",
+    ssid: "⚡HDX-Harbor",
     location: "Seattle, WA · Pioneer Square",
     pricePerMinute: 0.015,
     signalStrength: 3,
@@ -45,7 +45,7 @@ export const LISTINGS: HotspotListing[] = [
   {
     id: "hs-004",
     name: "Sunset Corridor AP",
-    ssid: "HDX-Sunset",
+    ssid: "⚡HDX-Sunset",
     location: "Austin, TX · South Congress",
     pricePerMinute: 0.005,
     signalStrength: 4,

@@ -228,24 +228,16 @@ export default function ConnectModal({ listing, onClose }: Props) {
               {/* WiFi connection instructions */}
               {listing.ssid && (
                 <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4 text-left space-y-3">
-                  <p className="text-emerald-400 font-semibold text-sm">Now connect your WiFi</p>
+                  <p className="text-emerald-400 font-semibold text-sm">You&apos;re connected!</p>
                   <div className="space-y-2 text-sm">
                     <div className="flex justify-between">
-                      <span className="text-slate-400">Network (SSID)</span>
+                      <span className="text-slate-400">Network</span>
                       <span className="text-white font-mono font-semibold">{listing.ssid}</span>
                     </div>
-                    {listing.hostIp && (
-                      <div className="flex justify-between">
-                        <span className="text-slate-400">Proxy</span>
-                        <span className="text-white font-mono">{listing.hostIp}:8080</span>
-                      </div>
-                    )}
                   </div>
-                  {listing.ssid && (
-                    <p className="text-xs text-slate-500">
-                      iPhone: Settings → WiFi → {listing.ssid} → Configure Proxy → Manual → enter proxy above
-                    </p>
-                  )}
+                  <p className="text-xs text-slate-500">
+                    Internet access is active. No proxy setup needed — captive portal handles everything.
+                  </p>
                 </div>
               )}
 

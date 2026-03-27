@@ -39,14 +39,14 @@ export default async function MarketplacePage() {
           <h1 className="text-3xl font-bold text-white">WiFi Marketplace</h1>
           <p className="text-slate-400 mt-2">
             {available} hotspot{available !== 1 ? "s" : ""} available near you ·
-            pay per minute, refund on early exit
+            find <span className="font-mono text-indigo-400">⚡HDX-</span> networks in your WiFi settings to connect
           </p>
         </div>
         <a
           href="/host"
           className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold transition-colors"
         >
-          + List My Hotspot
+          + Lease My WiFi
         </a>
       </div>
 
@@ -74,6 +74,34 @@ export default async function MarketplacePage() {
             <p className="text-sm text-slate-500 mt-1">{stat.label}</p>
           </div>
         ))}
+      </div>
+
+      {/* How it works */}
+      <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-2xl p-5 mb-8">
+        <h3 className="text-sm font-semibold text-indigo-200 mb-3 uppercase tracking-wider">How to buy WiFi</h3>
+        <div className="grid sm:grid-cols-3 gap-4 text-sm">
+          <div className="flex gap-3">
+            <span className="w-7 h-7 rounded-full bg-indigo-600/30 text-indigo-400 text-xs flex items-center justify-center font-bold flex-shrink-0">1</span>
+            <div>
+              <p className="text-white font-medium">Open WiFi Settings</p>
+              <p className="text-indigo-300/70 mt-0.5">Look for networks starting with <span className="font-mono text-indigo-300">⚡HDX-</span></p>
+            </div>
+          </div>
+          <div className="flex gap-3">
+            <span className="w-7 h-7 rounded-full bg-indigo-600/30 text-indigo-400 text-xs flex items-center justify-center font-bold flex-shrink-0">2</span>
+            <div>
+              <p className="text-white font-medium">Connect &amp; Pay</p>
+              <p className="text-indigo-300/70 mt-0.5">A payment page pops up automatically — like airport WiFi</p>
+            </div>
+          </div>
+          <div className="flex gap-3">
+            <span className="w-7 h-7 rounded-full bg-indigo-600/30 text-indigo-400 text-xs flex items-center justify-center font-bold flex-shrink-0">3</span>
+            <div>
+              <p className="text-white font-medium">Browse Freely</p>
+              <p className="text-indigo-300/70 mt-0.5">Internet unlocks instantly. Disconnect early for a refund.</p>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Listings grid */}

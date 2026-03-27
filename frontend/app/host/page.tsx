@@ -34,8 +34,23 @@ export default function HostPage() {
     hostIp: "",
   });
 
-  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
-    setForm((f) => ({ ...f, [k]: e.target.value }));
+  // Auto-generate SSID from name so it shows up recognizably in WiFi settings
+  function autoSSID(name: string): string {
+    const slug = name.replace(/[^a-zA-Z0-9]/g, "").slice(0, 16);
+    return slug ? `⚡HDX-${slug}` : "";
+  }
+
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const val = e.target.value;
+    setForm((f) => {
+      const next = { ...f, [k]: val };
+      // Auto-generate SSID when name changes (unless user manually edited SSID)
+      if (k === "name" && (f.ssid === "" || f.ssid === autoSSID(f.name))) {
+        next.ssid = autoSSID(val);
+      }
+      return next;
+    });
+  };
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -97,11 +112,10 @@ export default function HostPage() {
         <div className="bg-[#0f0f1a] border border-white/8 rounded-2xl p-5 space-y-4">
           <h3 className="text-white font-semibold">Setup checklist</h3>
           <ol className="space-y-3 text-sm text-slate-400 list-none">
-            <Step n={1} text="Plug iPhone into Mac via USB → enable Personal Hotspot on iPhone" />
-            <Step n={2} text="Mac: System Settings → General → Sharing → Internet Sharing → Share from: iPhone USB → To: WiFi → turn on" />
-            <Step n={3} text={`Your Mac now broadcasts WiFi SSID: "${form.ssid}"`} />
-            <Step n={4} text="Run: cd captive-portal && node server.js" />
-            <Step n={5} text="Buyers connect to your WiFi → portal pops up → they pay → internet opens" />
+            <Step n={1} text="Enable Internet Sharing on your Mac (share your connection over WiFi)" />
+            <Step n={2} text={`Set your WiFi network name to: "${listing?.ssid ?? form.ssid}"`} />
+            <Step n={3} text="Run: ./start.sh (starts everything automatically)" />
+            <Step n={4} text="Buyers see your hotspot in their phone's WiFi settings → connect → payment page pops up → they pay → internet opens" />
           </ol>
         </div>
 
@@ -126,16 +140,16 @@ export default function HostPage() {
   return (
     <div className="max-w-lg mx-auto px-4 py-12">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-white">List Your Hotspot</h1>
+        <h1 className="text-3xl font-bold text-white">Lease Your WiFi</h1>
         <p className="text-slate-400 mt-2">
-          Share your internet, earn ETH per minute. No ethernet cable needed — use iPhone USB tethering.
+          Share your internet, earn ETH per minute. Buyers see your hotspot in their phone&apos;s WiFi settings and pay via captive portal.
         </p>
       </div>
 
-      {/* No-ethernet tip */}
-      <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-xl p-4 mb-6 text-sm text-indigo-300 space-y-1">
-        <p className="font-semibold text-indigo-200">No ethernet? No problem.</p>
-        <p>iPhone USB → Mac (Internet Sharing) → Mac broadcasts WiFi hotspot. Buyers connect to your Mac&apos;s hotspot.</p>
+      {/* How it works */}
+      <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-xl p-4 mb-6 text-sm text-indigo-300 space-y-2">
+        <p className="font-semibold text-indigo-200">How buyers find you</p>
+        <p>Your hotspot appears as <strong className="text-white font-mono">⚡HDX-YourName</strong> in their WiFi settings. When they connect, a payment page pops up automatically — just like airport WiFi.</p>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-4">
@@ -149,14 +163,17 @@ export default function HostPage() {
           />
         </Field>
 
-        <Field label="WiFi SSID" hint="The network name buyers will connect to">
+        <Field label="WiFi SSID" hint="Shows in buyers' WiFi settings — auto-generated from name">
           <input
             required
             value={form.ssid}
             onChange={set("ssid")}
-            placeholder="HDX-MyHotspot"
+            placeholder="⚡HDX-CafeNova"
             className={inputCls}
           />
+          <p className="text-xs text-slate-600 mt-1">
+            Tip: All ⚡HDX- networks are recognizable as rentable hotspots
+          </p>
         </Field>
 
         <Field label="Location" hint="Helps buyers find you">

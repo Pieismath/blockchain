@@ -31,22 +31,49 @@ const cors      = require("cors");
 const path      = require("path");
 const { v4: uuidv4 } = require("uuid");
 const { execSync, exec } = require("child_process");
+const { randomBytes } = require("crypto");
+const bs58      = require("bs58");
 const dns2      = require("dns2");
 const { Packet } = dns2;
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
-const HTTP_PORT    = 8888;   // pf rdr :80  → :8888
-const DNS_PORT     = 5300;   // pf rdr :53  → :5300
+const HTTP_PORT = 8888;   // pf rdr :80  → :8888
+const DNS_PORT  = 5300;   // pf rdr :53  → :5300
 const CONTROL_API  = process.env.CONTROL_API  ?? "http://localhost:3001";
-const RATE_PER_MIN = 0.01;   // ETH per minute (display only — mock payment)
+const RATE_PER_MIN = parseFloat(process.env.RATE_PER_MIN ?? "0.001"); // SOL per minute
+
+// ─── Solana config ─────────────────────────────────────────────────────────────
+const SOLANA_RPC    = process.env.SOLANA_RPC    ?? "https://api.devnet.solana.com";
+const SOLANA_WALLET = process.env.SOLANA_WALLET ?? null; // host's wallet (base58)
+
+// ─── Hotspot config (set by start.sh or env vars) ────────────────────────────
+// These are served to the captive portal page via GET /config
+const HOTSPOT_CONFIG = {
+  name:            process.env.HOTSPOT_NAME     ?? "WiFi Hotspot",
+  ssid:            process.env.HOTSPOT_SSID     ?? "⚡HDX-Hotspot",
+  rate:            RATE_PER_MIN,
+  currency:        "SOL",
+  downloadMbps:    parseInt(process.env.HOTSPOT_DOWN ?? "100"),
+  uploadMbps:      parseInt(process.env.HOTSPOT_UP   ?? "50"),
+  signalStrength:  parseInt(process.env.HOTSPOT_SIGNAL ?? "4"),
+  location:        process.env.HOTSPOT_LOCATION ?? "",
+  walletConfigured: !!SOLANA_WALLET,
+};
 
 /** Detect the Mac's IP on the shared bridge (Internet Sharing interface). */
 function detectPortalIP() {
-  for (const iface of ["bridge100", "bridge101", "en0"]) {
+  for (const iface of ["bridge0", "bridge100", "bridge101", "en0"]) {
     try {
-      const ip = execSync(`ipconfig getifaddr ${iface}`, { encoding: "utf8" }).trim();
+      // Try ipconfig first
+      let ip = execSync(`ipconfig getifaddr ${iface} 2>/dev/null`, { encoding: "utf8" }).trim();
       if (ip) { console.log(`[Portal] Detected portal IP ${ip} on ${iface}`); return ip; }
+    } catch { /* try next */ }
+    try {
+      // Fall back to parsing ifconfig (picks up manually-assigned IPs)
+      const out = execSync(`ifconfig ${iface} 2>/dev/null`, { encoding: "utf8" });
+      const m = out.match(/inet (\d+\.\d+\.\d+\.\d+)/);
+      if (m) { console.log(`[Portal] Detected portal IP ${m[1]} on ${iface} (ifconfig)`); return m[1]; }
     } catch { /* try next */ }
   }
   console.warn("[Portal] Could not detect bridge IP — defaulting to 192.168.3.1");
@@ -63,6 +90,45 @@ const PORTAL_IP = process.env.PORTAL_IP ?? detectPortalIP();
  * automatically closes the CNA after payment.
  */
 const paidIPs = new Set();
+
+/**
+ * Pending Solana Pay sessions waiting for on-chain confirmation.
+ * Key: reference pubkey (base58)
+ * Value: { ip, minutes, created_at, activated }
+ */
+const pendingPayments = new Map();
+
+// ─── Solana Pay helpers ───────────────────────────────────────────────────────
+
+/** Generate a random 32-byte base58 public key to use as a Solana Pay reference. */
+function generateReference() {
+  return bs58.encode(randomBytes(32));
+}
+
+/**
+ * Poll the Solana RPC for a transaction that includes `referenceBase58`
+ * as an account.  Throws { name: "FindReferenceError" } if not found yet.
+ */
+async function findReferenceOnChain(referenceBase58) {
+  const res = await fetch(SOLANA_RPC, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id:      1,
+      method:  "getSignaturesForAddress",
+      params:  [referenceBase58, { limit: 1, commitment: "confirmed" }],
+    }),
+  });
+  const { result, error } = await res.json();
+  if (error) throw new Error(error.message);
+  if (!result || result.length === 0) {
+    const e = new Error("Reference not found");
+    e.name = "FindReferenceError";
+    throw e;
+  }
+  return result[0]; // { signature, slot, err, ... }
+}
 
 // ─── Firewall helpers (pfctl) ─────────────────────────────────────────────────
 
@@ -105,6 +171,112 @@ function clientIP(req) {
   const raw = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "";
   return raw.split(",")[0].trim().replace(/^::ffff:/, "");
 }
+
+// ── GET /config — serve hotspot info to the payment page ──────────────────────
+app.get("/config", (req, res) => {
+  res.json(HOTSPOT_CONFIG);
+});
+
+// ── GET /payment-request?minutes=N ────────────────────────────────────────────
+//
+// Creates a Solana Pay transfer-request URL with a unique reference key.
+// The portal page calls this, then opens the `solana:` deep-link to Phantom.
+
+app.get("/payment-request", (req, res) => {
+  if (!SOLANA_WALLET) {
+    return res.status(503).json({
+      error: "Solana wallet not configured — set the SOLANA_WALLET env var in start.sh.",
+    });
+  }
+
+  const ip      = clientIP(req);
+  const minutes = parseInt(req.query.minutes, 10) || 10;
+  const amount  = (RATE_PER_MIN * minutes).toFixed(6); // SOL
+  const ref     = generateReference();
+
+  const params = new URLSearchParams({
+    amount,
+    label:     "HotspotDEX",
+    message:   `WiFi — ${HOTSPOT_CONFIG.ssid} — ${minutes} min`,
+    reference: ref,
+    memo:      `hdx-${minutes}min`,
+  });
+  const solanaPayUrl = `solana:${SOLANA_WALLET}?${params.toString()}`;
+
+  pendingPayments.set(ref, { ip, minutes, created_at: Date.now(), activated: false });
+
+  // Prune expired entries (> 10 min old)
+  for (const [key, val] of pendingPayments) {
+    if (Date.now() - val.created_at > 10 * 60 * 1000) pendingPayments.delete(key);
+  }
+
+  console.log(`[Portal] Payment request: ${ip} ${minutes}min ${amount} SOL ref=${ref.slice(0, 8)}…`);
+  res.json({ url: solanaPayUrl, reference: ref, amount: parseFloat(amount), minutes });
+});
+
+// ── GET /payment-status?reference=<base58> ────────────────────────────────────
+//
+// Portal page polls this after the user approves in Phantom.
+// On first confirmed hit: opens the firewall, registers the proxy session.
+
+app.get("/payment-status", async (req, res) => {
+  const ref = req.query.reference;
+  if (!ref) return res.status(400).json({ error: "reference required" });
+
+  const pending = pendingPayments.get(ref);
+  if (!pending) return res.status(404).json({ error: "unknown or expired reference" });
+
+  // Already activated — just confirm
+  if (pending.activated) return res.json({ paid: true, already_active: true });
+
+  try {
+    const sigInfo = await findReferenceOnChain(ref);
+
+    // Mark activated immediately to prevent double-processing
+    pending.activated = true;
+
+    const { ip, minutes } = pending;
+    const session_id = uuidv4();
+
+    // Open the firewall for this IP
+    await pfAdd(ip);
+
+    // Register with the proxy control API (best-effort)
+    let sessionData = { session: { session_id, ip }, seconds_granted: minutes * 60 };
+    try {
+      const r = await fetch(`${CONTROL_API}/sessions`, {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ip, session_id, minutes_purchased: minutes, tx_hash: sigInfo.signature }),
+      });
+      if (r.ok) sessionData = await r.json();
+    } catch {
+      console.warn("[Portal] Control API unreachable — session tracked locally only");
+    }
+
+    paidIPs.add(ip);
+
+    // Auto-expire: close firewall when session ends
+    setTimeout(async () => {
+      paidIPs.delete(ip);
+      await pfRemove(ip);
+      pendingPayments.delete(ref);
+      console.log(`[Portal] Session expired for ${ip}`);
+    }, minutes * 60 * 1000);
+
+    console.log(`[Portal] Payment confirmed ${ip} sig=${sigInfo.signature.slice(0, 10)}…`);
+    res.json({
+      paid:            true,
+      session:         sessionData.session,
+      seconds_granted: sessionData.seconds_granted ?? minutes * 60,
+    });
+
+  } catch (err) {
+    if (err.name === "FindReferenceError") return res.json({ paid: false });
+    console.error("[Portal] payment-status error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ── Apple captive-portal detection endpoints ──────────────────────────────────
 //
@@ -216,8 +388,23 @@ app.get("/status", (req, res) => {
   res.json({ ip, paid });
 });
 
-// ── Catch-all redirect to payment page ───────────────────────────────────────
+// ── Catch-all ────────────────────────────────────────────────────────────────
 app.get("*", (req, res) => {
+  const ip = clientIP(req);
+
+  if (paidIPs.has(ip)) {
+    // Paid client hit the portal via pf rdr on port 80 — redirect to HTTPS
+    // version of the site they were trying to reach so they can browse normally.
+    const host = req.headers.host;
+    if (host && !host.startsWith(PORTAL_IP)) {
+      return res.redirect(302, `https://${host}${req.url}`);
+    }
+    // Fallback: return Apple "Success" so CNA closes
+    res.set("Content-Type", "text/html");
+    return res.send("<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
+  }
+
+  // Unpaid client — redirect to payment page
   res.redirect(302, `http://${PORTAL_IP}:${HTTP_PORT}/`);
 });
 
@@ -228,19 +415,45 @@ app.listen(HTTP_PORT, "0.0.0.0", () => {
 
 // ─── DNS Server ───────────────────────────────────────────────────────────────
 //
-// Responds to ALL DNS queries with PORTAL_IP.
-// This intercepts iOS's lookup of captive.apple.com (and everything else)
-// so all HTTP traffic ends up at our portal server.
+// Unpaid clients: resolves ALL domains to PORTAL_IP so iOS captive portal
+//                 check (captive.apple.com) hits our HTTP server.
+// Paid clients:   forwards DNS queries to upstream (8.8.8.8) so they can
+//                 actually browse the internet after paying.
 //
 // pf redirects UDP :53 → :5300 on the bridge interface, so we don't need root.
 
+const { resolve4 } = require("dns");
+
 const dnsServer = dns2.createServer({
   udp: true,
-  handle: (request, send) => {
+  handle: (request, send, rinfo) => {
+    const clientIP = (rinfo?.address || "").replace(/^::ffff:/, "");
     const response = Packet.createResponseFromRequest(request);
 
+    // ── Paid client → forward to real DNS ──
+    if (paidIPs.has(clientIP)) {
+      const question = request.questions[0];
+      if (question && question.type === Packet.TYPE.A) {
+        resolve4(question.name, (err, addresses) => {
+          if (!err && addresses && addresses.length) {
+            for (const addr of addresses) {
+              response.answers.push({
+                name:    question.name,
+                type:    Packet.TYPE.A,
+                class:   Packet.CLASS.IN,
+                ttl:     60,
+                address: addr,
+              });
+            }
+          }
+          send(response);
+        });
+        return;
+      }
+    }
+
+    // ── Unpaid client → resolve everything to portal IP ──
     for (const question of request.questions) {
-      // A record: always return the portal IP
       response.answers.push({
         name:    question.name,
         type:    Packet.TYPE.A,
