@@ -3,7 +3,7 @@ import "./globals.css";
 import Header from "@/components/Header";
 
 export const metadata: Metadata = {
-  title: "HotspotDEX — Solana-paid programmable hotspot",
+  title: "Netra — Solana-paid programmable hotspot",
   description:
     "Paid hotspot access for humans and agents with Solana receipts, x402 APIs, and Filecoin-backed session proofs.",
 };

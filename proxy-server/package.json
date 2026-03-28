@@ -1,7 +1,7 @@
 {
-  "name": "hotspot-dex-proxy",
+  "name": "netra-proxy",
   "version": "1.0.0",
-  "description": "HotspotDEX proxy server — intercepts HTTP traffic and enforces paid sessions",
+  "description": "Netra proxy server — intercepts HTTP traffic and enforces paid sessions",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

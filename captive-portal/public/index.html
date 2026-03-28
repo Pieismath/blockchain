@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-  <title>HotspotDEX</title>
+  <title>Netra</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -448,6 +448,50 @@
       cursor: pointer;
       -webkit-tap-highlight-color: transparent;
     }
+    .waiting-actions {
+      width: 100%;
+      max-width: 400px;
+      display: grid;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .waiting-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      padding: 13px 18px;
+      border-radius: 12px;
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 700;
+      border: 1px solid rgba(99,102,241,0.22);
+      background: rgba(99,102,241,0.14);
+      color: #c7d2fe;
+    }
+    .waiting-link.secondary {
+      border-color: rgba(255,255,255,0.1);
+      background: transparent;
+      color: var(--muted);
+    }
+    .debug-box {
+      width: 100%;
+      max-width: 400px;
+      margin-bottom: 12px;
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.03);
+      padding: 12px 14px;
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--muted);
+    }
+    .debug-box strong {
+      color: var(--text);
+      display: block;
+      margin-bottom: 4px;
+    }
   </style>
 </head>
 <body>
@@ -462,7 +506,7 @@
       <path d="M8.53 16.11a6 6 0 0 1 6.95 0"/>
       <circle cx="12" cy="20" r="1" fill="currentColor"/>
     </svg>
-    <div class="logo-text">Hotspot<span>DEX</span></div>
+    <div class="logo-text">Netra</div>
   </div>
 
   <div class="wifi-notice">
@@ -572,6 +616,11 @@
         This page checks automatically.
       </div>
     </div>
+    <div id="waiting-actions" class="waiting-actions" style="display:none;"></div>
+    <div id="debug-box" class="debug-box" style="display:none;">
+      <strong id="debug-stage">Debug stage</strong>
+      <div id="debug-detail"></div>
+    </div>
     <button class="cancel-btn" onclick="cancelWaiting()">Cancel</button>
   </div>
 
@@ -631,26 +680,31 @@
     </div>
   </div>
 
+  <!-- CNA hint — shown on all iPhones because the captive browser blocks
+       custom URL scheme navigation. Safari (with cellular) has no such limits. -->
   <div class="how-it-works" id="cna-hint" style="display:none;">
-    <strong>Tip:</strong> The iPhone captive browser can block wallet handoff. HotspotDEX will try Safari automatically when needed.
+    <strong>iPhone?</strong> If Phantom doesn&rsquo;t open, tap below to pay in Safari instead &mdash; your Phantom wallet works there with full cellular access.
     <a id="safari-link" href="#"
-       style="display:block;margin-top:8px;color:#818cf8;text-decoration:underline;font-weight:600;"
-       onclick="window.open(this.href);return false;">
-      Continue in Safari &rarr;
+       style="display:block;margin-top:10px;padding:11px 16px;
+              background:rgba(129,140,248,0.15);border:1px solid rgba(129,140,248,0.3);
+              border-radius:10px;color:#a5b4fc;text-decoration:none;
+              font-weight:700;font-size:14px;text-align:center;">
+      Open in Safari &amp; Pay with Phantom &rarr;
     </a>
   </div>
 
   <div class="footer">
-    Powered by HotspotDEX &middot; Peer-to-peer WiFi marketplace
+    Powered by Netra &middot; Peer-to-peer WiFi marketplace
   </div>
 
+  <script src="/vendor/solana-web3.js"></script>
   <script>
     'use strict';
 
     // ── Config (loaded from server) ────────────────────────────────────
     var CFG = {
       name: 'WiFi Hotspot',
-      ssid: '\u26a1HDX-Hotspot',
+      ssid: '\u26a1Netra-Hotspot',
       rate: 0.001,
       currency: 'SOL',
       downloadMbps: 100,
@@ -659,6 +713,7 @@
       location: '',
       walletConfigured: false,
       rpcHost: 'api.devnet.solana.com',
+      securePortalOrigin: 'https://captive.apple.com',
     };
 
     var selectedMinutes = 10;
@@ -683,12 +738,25 @@
       secureWalletOrigin: 'https://captive.apple.com/',
       autoPayRequested: false,
       activeReference: null,
+      walletBrowser: null,
+      // Detect checkout mode NOW (before selectDuration runs at bottom of
+      // script) so _prefetch is skipped and we don't mint a competing reference.
+      checkoutMode: window.location.pathname === '/checkout' ||
+        new URLSearchParams(window.location.search).get('checkout') === '1',
+      checkoutLaunchTimer: null,
+      checkoutProcessing: false,
+      lastPhantomTargets: null,
     };
 
     var initialParams = new URLSearchParams(window.location.search);
     var requestedListingId = initialParams.get('listingId');
     var requestedMinutes = parseInt(initialParams.get('minutes') || '', 10);
     var shouldAutoPay = initialParams.get('autopay') === '1';
+    var checkoutReference = initialParams.get('reference');
+    var checkoutPayUrl = initialParams.get('payUrl');
+    var checkoutAmount = parseFloat(initialParams.get('amount') || '');
+    var requestedWalletBrowser = initialParams.get('walletBrowser');
+    var debugMode = initialParams.get('debug') === '1';
 
     // ── Load hotspot config from server ───────────────────────────────
     Promise.all([
@@ -714,8 +782,90 @@
       return Boolean(window.phantom && window.phantom.solana && window.phantom.solana.isPhantom);
     }
 
+    function debugTrace(stage, detail) {
+      var payload = {
+        stage: stage,
+        path: window.location.pathname + window.location.search,
+        reference: (_payReq && _payReq.reference) || uiState.activeReference || checkoutReference || null,
+        detail: detail || {}
+      };
+
+      var stageEl = document.getElementById('debug-stage');
+      var detailEl = document.getElementById('debug-detail');
+      var boxEl = document.getElementById('debug-box');
+      if (stageEl) stageEl.textContent = 'Debug: ' + stage;
+      if (detailEl) detailEl.textContent = JSON.stringify(payload.detail);
+      if (boxEl && (debugMode || /error|failed|timeout|blocked|missing|unavailable/.test(stage))) {
+        boxEl.style.display = '';
+      }
+
+      try {
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon('/debug-event', new Blob([JSON.stringify(payload)], { type: 'application/json' }));
+        } else {
+          fetch('/debug-event', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            keepalive: true
+          }).catch(function() {});
+        }
+      } catch (err) {
+        // Local debug logging should never interrupt payment UX.
+      }
+    }
+
+    function clearWaitingActions() {
+      var actionsEl = document.getElementById('waiting-actions');
+      if (!actionsEl) return;
+      actionsEl.innerHTML = '';
+      actionsEl.style.display = 'none';
+    }
+
+    function renderWaitingActions(html) {
+      var actionsEl = document.getElementById('waiting-actions');
+      if (!actionsEl) return;
+      actionsEl.innerHTML = html || '';
+      actionsEl.style.display = html ? '' : 'none';
+    }
+
+    function escapeAttr(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+
+    function traceRecoveryLink(stage, url) {
+      debugTrace(stage, {
+        url: url
+      });
+      return true;
+    }
+
+    function clearHandoffMonitor() {
+      if (uiState.checkoutLaunchTimer) {
+        clearTimeout(uiState.checkoutLaunchTimer);
+        uiState.checkoutLaunchTimer = null;
+      }
+    }
+
+    function isIosFamily() {
+      return /iPhone|iPad|iPod/.test(navigator.userAgent);
+    }
+
     function isSecureWalletContext() {
       return window.location.protocol === 'https:' || /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname);
+    }
+
+    function isRemoteSecureCheckoutOrigin() {
+      try {
+        var checkoutOrigin = new URL(uiState.secureWalletOrigin).origin;
+        return checkoutOrigin !== window.location.origin && checkoutOrigin !== 'https://captive.apple.com';
+      } catch (err) {
+        return false;
+      }
     }
 
     function isCaptiveIosBrowser() {
@@ -725,7 +875,16 @@
     }
 
     function buildSecurePortalUrl(params) {
-      var url = new URL(uiState.secureWalletOrigin);
+      var origin = uiState.secureWalletOrigin;
+      try {
+        var parsed = new URL(origin);
+        if (parsed.hostname === 'captive.apple.com') {
+          origin = window.location.origin;
+        }
+      } catch (err) {
+        origin = window.location.origin;
+      }
+      var url = new URL(origin);
       Object.keys(params || {}).forEach(function(key) {
         if (params[key] !== undefined && params[key] !== null && params[key] !== '') {
           url.searchParams.set(key, String(params[key]));
@@ -734,14 +893,145 @@
       return url.toString();
     }
 
+    function buildCheckoutUrl(req) {
+      var url = buildSecurePortalUrl({
+        listingId: req.listingId || selectedListingId || CFG.listingId,
+        minutes: req.minutes || selectedMinutes,
+        autopay: 1,
+        reference: req.reference,
+        checkout: 1,
+      });
+      if (req.url) {
+        var built = new URL(url);
+        built.searchParams.set('payUrl', req.url);
+        if (req.amount !== undefined && req.amount !== null && req.amount !== '') {
+          built.searchParams.set('amount', String(req.amount));
+        }
+        return built.toString();
+      }
+      return url;
+    }
+
+    function buildPhantomWalletCheckoutUrl(req) {
+      var baseUrl = (req && req.checkoutUrl) || (uiState.checkoutMode ? window.location.href : buildCheckoutUrl(req || {}));
+      var url = new URL(baseUrl, window.location.origin);
+      url.searchParams.set('checkout', '1');
+      url.searchParams.set('autopay', '1');
+      url.searchParams.set('walletBrowser', 'phantom');
+      if (req && req.reference) url.searchParams.set('reference', req.reference);
+      if (req && req.listingId) url.searchParams.set('listingId', req.listingId);
+      if (req && req.minutes) url.searchParams.set('minutes', String(req.minutes));
+      if (req && req.url) url.searchParams.set('payUrl', req.url);
+      if (req && req.amount !== undefined && req.amount !== null && req.amount !== '') {
+        url.searchParams.set('amount', String(req.amount));
+      }
+      return url.toString();
+    }
+
+    function buildPhantomLaunchTargets(req) {
+      var checkoutUrl = buildPhantomWalletCheckoutUrl(req || _payReq || {});
+      var refOrigin = window.location.origin || ('http://' + window.location.host);
+      return {
+        checkoutUrl: checkoutUrl,
+        customUrl: 'phantom://browse/' + encodeURIComponent(checkoutUrl) + '?ref=' + encodeURIComponent(refOrigin),
+        customUlUrl: 'phantom://ul/browse/' + encodeURIComponent(checkoutUrl) + '?ref=' + encodeURIComponent(refOrigin),
+        universalUrl: 'https://phantom.app/ul/browse/' + encodeURIComponent(checkoutUrl) + '?ref=' + encodeURIComponent(refOrigin)
+      };
+    }
+
+    function launchPhantomCheckout(stage) {
+      var targets = uiState.lastPhantomTargets || buildPhantomLaunchTargets(_payReq || {});
+      if (!targets) return true;
+
+      uiState.lastPhantomTargets = targets;
+      document.getElementById('error-msg').style.display = 'none';
+      document.getElementById('payment-screen').style.display = 'none';
+      document.getElementById('waiting-screen').style.display = '';
+      setPortalStatus('Pending');
+      setWaitingCopy(
+        'Opening Phantom…',
+        isRemoteSecureCheckoutOrigin()
+          ? 'Netra is opening the secure checkout for payment. Your iPhone may use cellular for this step, but hotspot access stays blocked until the x402 payment verifies here.'
+          : 'Netra is opening this secure local checkout inside Phantom. Once Phantom loads the page, approval happens there and internet unlocks only after x402 verification.'
+      );
+      debugTrace(stage || 'phantom_checkout_launch', {
+        checkoutUrl: targets.checkoutUrl,
+        customUrl: targets.customUrl,
+        customUlUrl: targets.customUlUrl,
+        universalUrl: targets.universalUrl
+      });
+
+      clearHandoffMonitor();
+      var attempts = [
+        { name: 'custom', url: targets.customUrl },
+        { name: 'custom_ul', url: targets.customUlUrl },
+        { name: 'universal', url: targets.universalUrl }
+      ].filter(function(item) { return Boolean(item.url); });
+
+      function tryAttempt(index) {
+        if (index >= attempts.length) {
+          debugTrace('phantom_checkout_launch_blocked', {
+            checkoutUrl: targets.checkoutUrl
+          });
+          setWaitingCopy(
+            'Phantom still did not open',
+            isRemoteSecureCheckoutOrigin()
+              ? 'Safari stayed on the captive portal. You can retry opening the secure checkout, and iPhone may use cellular for the wallet step while Netra keeps checking the x402 reference.'
+              : 'Safari stayed on the local portal. You can retry opening Phantom, or use the direct Solana Pay fallback below while Netra keeps checking the x402 reference.'
+          );
+          return;
+        }
+
+        var attempt = attempts[index];
+        debugTrace('phantom_checkout_launch_try', {
+          attempt: attempt.name,
+          url: attempt.url
+        });
+        window.location.href = attempt.url;
+        uiState.checkoutLaunchTimer = setTimeout(function() {
+          if (document.hidden) {
+            clearHandoffMonitor();
+            return;
+          }
+          tryAttempt(index + 1);
+        }, index === attempts.length - 1 ? 1200 : 700);
+      }
+
+      tryAttempt(0);
+      return false;
+    }
+
+    function buildPaymentQrMarkup(req, amountDisplay) {
+      if (!req || !req.reference) return '';
+      return '' +
+        '<div style="margin-top:18px;padding:16px;border-radius:18px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);text-align:center;">' +
+          '<div style="font-size:13px;font-weight:700;color:#f8fafc;margin-bottom:6px;">Most reliable fallback: pay from another device</div>' +
+          '<div style="font-size:12px;color:#94a3b8;line-height:1.5;margin-bottom:12px;">' +
+            'Open Phantom or any Solana Pay wallet on another phone, scan this QR, approve ' + amountDisplay + ', and keep this hotspot page open. Netra will verify the x402 reference here and unlock the captive session automatically.' +
+          '</div>' +
+          '<div style="display:inline-flex;padding:10px;border-radius:18px;background:#fff;">' +
+            '<img src="/payment-qr.svg?reference=' + encodeURIComponent(req.reference) + '" alt="Solana Pay QR" style="display:block;width:220px;height:220px;" />' +
+          '</div>' +
+        '</div>';
+    }
+
     function updateSafariHint(listingId, minutes) {
       var safariLink = document.getElementById('safari-link');
       if (!safariLink) return;
-      safariLink.href = buildSecurePortalUrl({
-        listingId: listingId || selectedListingId || CFG.listingId,
-        minutes: minutes || selectedMinutes,
-        autopay: 1,
+      // Build a local portal URL using the current page's origin so Safari
+      // actually hits the portal server (not captive.apple.com).
+      // Use x-safari-http: so tapping the link opens Safari directly from
+      // within the iOS CNA browser rather than navigating inside CNA.
+      var portalUrl = window.location.origin + '/';
+      var params = new URLSearchParams({
+        autopay: '1',
+        listingId: listingId || selectedListingId || CFG.listingId || '',
+        minutes:   String(minutes || selectedMinutes || 10),
       });
+      var targetHref = portalUrl + '?' + params.toString();
+      // x-safari-http:// tells iOS to open the URL in Safari instead of CNA.
+      safariLink.href = 'x-safari-' + targetHref;
+      safariLink.removeAttribute('onclick');
     }
 
     function currentListing() {
@@ -791,6 +1081,7 @@
     }
 
     function applyConfig() {
+      uiState.secureWalletOrigin = CFG.securePortalOrigin || uiState.secureWalletOrigin;
       renderMarketplace();
 
       if (requestedListingId && MARKETPLACE.some(function(item) { return item.id === requestedListingId; })) {
@@ -847,8 +1138,10 @@
         stateEl.textContent = uiState.isCna ? 'Phantom launches during payment' : 'Wallet handoff happens during payment';
         metaEl.textContent =
           'Only this portal and ' + CFG.rpcHost + ' stay reachable before payment. ' +
-          (uiState.isCna ? 'HotspotDEX will move checkout into Safari if the captive browser blocks wallet launch.' :
-            'Tap Pay to open Phantom directly.');
+          (uiState.isCna ? 'Netra will move checkout into Safari if the captive browser blocks wallet launch.' :
+            (isRemoteSecureCheckoutOrigin()
+              ? 'Tap Pay to continue on a secure checkout origin; iPhone can use cellular for payment while the hotspot stays locked.'
+              : 'Tap Pay to open Phantom directly.'));
         btnEl.textContent = 'Connect Wallet';
         btnEl.disabled = true;
         btnEl.style.opacity = '0.55';
@@ -870,7 +1163,7 @@
         return;
       }
 
-      _showError('Phantom wallet injection is only available on secure pages. Tap Pay and HotspotDEX will handle the wallet handoff.');
+      _showError('Phantom wallet injection is only available on secure pages. Tap Pay and Netra will handle the wallet handoff.');
       renderWalletStatus();
     }
 
@@ -944,28 +1237,49 @@
       var cost = (listing.pricePerMinute * min).toFixed(4);
       document.getElementById('sum-dur').textContent   = min + ' minutes';
       document.getElementById('sum-total').textContent = cost + ' SOL';
-      document.getElementById('pay-btn-text').textContent = 'Pay ' + cost + ' SOL with Phantom';
+      document.getElementById('pay-btn-text').textContent = CFG.demoBuyerReady
+        ? 'Pay ' + cost + ' SOL \u2014 One Tap'
+        : 'Pay ' + cost + ' SOL with Phantom';
       updateSafariHint(selectedListingId, min);
 
-      // Pre-fetch a fresh payment request for this duration
-      _prefetch(min);
+      // Pre-fetch a fresh payment request for this duration.
+      // Skip in checkout mode — we already have a reference from the URL;
+      // minting a new one here would race and overwrite _payReq.
+      if (!uiState.checkoutMode) {
+        _prefetch(min);
+      }
     }
 
     function _prefetch(minutes) {
       _payReq = null;
       updatePayButton(false, 'Preparing payment…');
       var listing = currentListing();
+      debugTrace('payment_request_prefetch', {
+        minutes: minutes,
+        listingId: listing.id
+      });
       fetch('/payment-request?minutes=' + minutes + '&listingId=' + encodeURIComponent(listing.id))
         .then(function(r) { return r.json(); })
         .then(function(d) {
           if (!d.error) {
             _payReq = d;
+            debugTrace('payment_request_ready', {
+              minutes: minutes,
+              listingId: listing.id,
+              reference: d.reference
+            });
             updatePayButton(true, 'Pay ' + (listing.pricePerMinute * minutes).toFixed(4) + ' SOL with Phantom');
           } else {
+            debugTrace('payment_request_error', {
+              message: d.error
+            });
             updatePayButton(false, 'Payment unavailable');
           }
         })
-        .catch(function() {
+        .catch(function(err) {
+          debugTrace('payment_request_error', {
+            message: err && err.message ? err.message : 'fetch failed'
+          });
           updatePayButton(false, 'Payment unavailable');
         });
     }
@@ -984,90 +1298,387 @@
       if (bodyEl) bodyEl.innerHTML = body;
     }
 
+    function showHandoffFailureOptions(req, reason) {
+      if (!req) return;
+      var checkoutUrl = req.checkoutUrl || buildCheckoutUrl(req);
+      uiState.lastPhantomTargets = buildPhantomLaunchTargets(req);
+      debugTrace('handoff_blocked', {
+        reason: reason,
+        checkoutMode: uiState.checkoutMode,
+        hasInjectedPhantom: hasInjectedPhantom(),
+        isCna: uiState.isCna
+      });
+      setWaitingCopy(
+        'Phantom did not open automatically',
+        isRemoteSecureCheckoutOrigin()
+          ? 'The captive browser blocked the wallet handoff. Open the secure checkout below; iPhone can use cellular for the payment step while Netra keeps the hotspot blocked until verification.'
+          : 'The iPhone captive browser likely blocked the wallet handoff. Choose one of the recovery options below and Netra will keep checking for the verified payment.'
+      );
+      renderWaitingActions(
+        '<a class="waiting-link" href="' + escapeAttr(checkoutUrl) + '" onclick="return traceRecoveryLink(\'recovery_checkout\', this.href)">Continue to secure checkout</a>' +
+        '<a class="waiting-link secondary" href="' + escapeAttr(uiState.lastPhantomTargets.customUrl || uiState.lastPhantomTargets.universalUrl) + '" onclick="return launchPhantomCheckout(\'recovery_phantom_browse\')">Open secure checkout in Phantom</a>' +
+        (req.url ? '<a class="waiting-link secondary" href="' + escapeAttr(req.url) + '" onclick="return traceRecoveryLink(\'recovery_solana_pay\', this.href)">Open Solana Pay directly</a>' : '')
+      );
+    }
+
+    async function runInjectedCheckoutFlow() {
+      if (uiState.checkoutProcessing || !_payReq || !_payReq.reference) return;
+      if (!hasInjectedPhantom() || !window.solanaWeb3 || !window.solanaWeb3.Transaction) {
+        debugTrace('checkout_provider_missing', {
+          hasInjectedPhantom: hasInjectedPhantom(),
+          hasSolanaWeb3: Boolean(window.solanaWeb3 && window.solanaWeb3.Transaction)
+        });
+        return;
+      }
+
+      uiState.checkoutProcessing = true;
+      uiState.activeReference = _payReq.reference;
+      var submittedSignature = null;
+      debugTrace('checkout_injected_start', {
+        checkoutMode: uiState.checkoutMode,
+        secureContext: isSecureWalletContext()
+      });
+      setPortalStatus('Pending');
+      document.getElementById('payment-screen').style.display  = 'none';
+      document.getElementById('waiting-screen').style.display  = '';
+      clearWaitingActions();
+      setWaitingCopy(
+        'Preparing secure payment…',
+        'Connecting to Phantom, sending the Solana payment, and verifying the x402 receipt.'
+      );
+
+      try {
+        var provider = window.phantom.solana;
+        debugTrace('provider_connect_start', {});
+        var connectResp = await provider.connect();
+        debugTrace('provider_connect_ok', {
+          wallet: connectResp.publicKey.toString()
+        });
+        walletState.connected = true;
+        walletState.publicKey = connectResp.publicKey.toString();
+        renderWalletStatus();
+
+        setWaitingCopy(
+          'Sending Solana payment…',
+          'Approve the hotspot session purchase in Phantom. Netra will verify it and unlock access automatically.'
+        );
+
+        debugTrace('payment_transaction_request', {});
+        var txResp = await fetch('/payment-transaction?reference=' +
+          encodeURIComponent(_payReq.reference) +
+          '&buyerWallet=' + encodeURIComponent(walletState.publicKey));
+        var txData = await txResp.json();
+        if (!txResp.ok) throw new Error(txData.error || 'Could not build payment transaction');
+        debugTrace('payment_transaction_ok', {
+          payTo: txData.payTo,
+          amountSol: txData.amountSol
+        });
+
+        var txBytes = Uint8Array.from(atob(txData.serializedTransaction), function(c) {
+          return c.charCodeAt(0);
+        });
+        var tx = window.solanaWeb3.Transaction.from(txBytes);
+        debugTrace('sign_and_send_start', {});
+        var signed = await provider.signAndSendTransaction(tx);
+        var signature = signed && (signed.signature || signed.hash || signed);
+        if (!signature) throw new Error('Phantom did not return a transaction signature');
+        submittedSignature = signature;
+        debugTrace('sign_and_send_ok', {
+          signature: String(signature)
+        });
+
+        setWaitingCopy(
+          'Verifying payment…',
+          'Netra is confirming your Solana transaction and activating the hotspot session.'
+        );
+
+        debugTrace('payment_finalize_start', {});
+        var finalizeResp = await fetch('/payment-finalize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            reference: _payReq.reference,
+            signature: signature,
+            buyerWallet: walletState.publicKey,
+          })
+        });
+        var finalizeData = await finalizeResp.json();
+        if (!finalizeResp.ok) throw new Error(finalizeData.error || 'Could not finalize payment');
+
+        uiState.checkoutProcessing = false;
+        uiState.activeReference = null;
+        debugTrace('payment_finalize_ok', {
+          txHash: finalizeData.tx_hash || null,
+          cid: finalizeData.session && finalizeData.session.filecoin
+            ? finalizeData.session.filecoin.latestCid || null
+            : null
+        });
+        showSuccess(finalizeData);
+      } catch (err) {
+        uiState.checkoutProcessing = false;
+        debugTrace('checkout_error', {
+          message: err && err.message ? err.message : String(err),
+          submittedSignature: submittedSignature || null
+        });
+        if (submittedSignature && _payReq && _payReq.reference) {
+          uiState.activeReference = _payReq.reference;
+          _startPolling(_payReq.reference);
+          _showError('Checkout needs confirmation: ' + err.message);
+          return;
+        }
+        cancelWaiting();
+        _showError('Checkout did not complete: ' + err.message);
+      }
+    }
+
     function launchPhantom(req) {
       uiState.activeReference = req.reference;
+      debugTrace('solana_deeplink_launch', {
+        checkoutMode: uiState.checkoutMode
+      });
       setWaitingCopy(
         'Waiting for Phantom…',
         'Approve the payment in Phantom, then come back here.<br>This page checks automatically.'
       );
       document.getElementById('payment-screen').style.display  = 'none';
       document.getElementById('waiting-screen').style.display  = '';
+      clearWaitingActions();
       setPortalStatus('Pending');
       _startPolling(req.reference);
-      window.location.replace(req.url);
+      clearHandoffMonitor();
+      uiState.checkoutLaunchTimer = setTimeout(function() {
+        if (!document.hidden) {
+          // Page is still visible — Phantom did not open from this browser.
+          // Surface the Safari fallback so the user can pay from there.
+          debugTrace('solana_deeplink_not_hidden', {});
+          updateSafariHint(req.listingId, req.minutes);
+          var hint = document.getElementById('cna-hint');
+          if (hint) hint.style.display = '';
+          setWaitingCopy(
+            'Open Safari to pay',
+            'Phantom could not open from this browser window.<br>' +
+            'Tap <strong style="color:#a5b4fc;">Open in Safari &amp; Pay with Phantom</strong> below &mdash; ' +
+            'your cellular data handles the payment and this page unlocks automatically.'
+          );
+        }
+      }, 2000);
+      window.location.href = req.url;
     }
 
     function startSafariHandoff() {
-      var listing = currentListing();
-      var safariUrl = buildSecurePortalUrl({
-        listingId: listing.id,
-        minutes: selectedMinutes,
-        autopay: 1,
-      });
+      var req = _payReq;
+      if (!req || req.minutes !== selectedMinutes) return false;
+      var checkoutUrl = req.checkoutUrl || buildCheckoutUrl(req);
 
+      debugTrace('handoff_start', {
+        phantomBrowseUrl: req.phantomBrowseUrl || null,
+        checkoutUrl: checkoutUrl,
+        hasInjectedPhantom: hasInjectedPhantom(),
+        isCna: uiState.isCna
+      });
       document.getElementById('error-msg').style.display = 'none';
-      updateSafariHint(listing.id, selectedMinutes);
+      updateSafariHint(req.listingId, req.minutes);
       setWaitingCopy(
         'Opening secure checkout…',
-        'The iPhone captive browser can block wallet launch.<br>HotspotDEX is moving payment into Safari automatically.'
+        isRemoteSecureCheckoutOrigin()
+          ? 'Netra is moving you to the secure checkout page for payment. iPhone may use cellular for the wallet step, but your hotspot session unlocks only after onchain verification.'
+          : 'Netra is moving you to the local checkout page, then will hand payment to Phantom from there.<br>Your session unlocks only after onchain verification.'
       );
       document.getElementById('payment-screen').style.display  = 'none';
       document.getElementById('waiting-screen').style.display  = '';
+      clearWaitingActions();
       setPortalStatus('Pending');
-
-      var opened = window.open(safariUrl, '_blank');
-      if (!opened) {
-        cancelWaiting();
-        var hint = document.getElementById('cna-hint');
-        if (hint) hint.style.display = '';
-        _showError('Safari checkout was blocked. Use the Safari link below to continue payment.');
-        return;
-      }
-
-      setTimeout(function() {
+      // Remember the reference so pageshow / visibilitychange can confirm
+      // payment when the user returns from Phantom.
+      uiState.activeReference = req.reference;
+      _startPolling(req.reference);
+      clearHandoffMonitor();
+      uiState.checkoutLaunchTimer = setTimeout(function() {
         if (!document.hidden) {
-          cancelWaiting();
-          var hint = document.getElementById('cna-hint');
-          if (hint) hint.style.display = '';
-          _showError('Secure checkout opened in Safari. Continue payment there if Phantom did not launch automatically.');
+          showHandoffFailureOptions(req, 'checkout_not_opened');
         }
-      }, 1400);
+      }, 1500);
+      window.location.assign(checkoutUrl);
+      return true;
+    }
+
+    // Shown inside the waiting box when Phantom is not injected on the checkout
+    // page. Instead of relying on a raw solana: handler, we now try to move the
+    // exact same local checkout page into Phantom's own browser first.
+    function showPhantomCheckoutButton(req) {
+      document.getElementById('payment-screen').style.display = 'none';
+      document.getElementById('waiting-screen').style.display = '';
+      setPortalStatus('Pending');
+      uiState.lastPhantomTargets = buildPhantomLaunchTargets(req);
+      var amountDisplay = req.amount
+        ? (req.amount).toFixed ? req.amount.toFixed(4) + ' SOL' : req.amount + ' SOL'
+        : 'session fee';
+      debugTrace('checkout_phantom_browser_cta', {
+        amount: amountDisplay,
+        hasInjectedPhantom: hasInjectedPhantom(),
+        walletBrowser: uiState.walletBrowser || null
+      });
+      setWaitingCopy(
+        uiState.walletBrowser === 'phantom'
+          ? 'Phantom opened, but wallet injection is still unavailable'
+          : 'Continue this checkout in Phantom',
+        uiState.walletBrowser === 'phantom'
+          ? 'Phantom reached the local checkout, but the wallet provider still is not available on this page. Retry opening the checkout inside Phantom, or use the second-device QR fallback below while Netra keeps checking the x402 reference.' + buildPaymentQrMarkup(req, amountDisplay)
+          : (isRemoteSecureCheckoutOrigin()
+              ? 'Open the secure checkout and approve the hotspot payment there. Your iPhone can use cellular for the wallet/payment step, but Netra will only unlock hotspot access after onchain verification.' + buildPaymentQrMarkup(req, amountDisplay)
+              : 'Open this same local checkout inside Phantom. Once Phantom loads it, you can approve the hotspot payment there and Netra will unlock access after onchain verification.' + buildPaymentQrMarkup(req, amountDisplay))
+      );
+      renderWaitingActions(
+        '<a class="waiting-link" href="' + escapeAttr(uiState.lastPhantomTargets.customUrl || uiState.lastPhantomTargets.universalUrl) + '" onclick="return launchPhantomCheckout(\'checkout_open_phantom_browser\')">Open secure checkout in Phantom</a>' +
+        (req.url ? '<a class="waiting-link secondary" href="' + escapeAttr(req.url) + '" onclick="return traceRecoveryLink(\'manual_solana_pay_tap\', this.href)">Open Solana Pay directly</a>' : '') +
+        '<a class="waiting-link secondary" href="/payment-qr.svg?reference=' + encodeURIComponent(req.reference) + '" target="_blank" rel="noopener">Open payment QR</a>'
+      );
     }
 
     function maybeAutoPay() {
       if (!shouldAutoPay || uiState.autoPayRequested) return;
       uiState.autoPayRequested = true;
-      window.history.replaceState({}, document.title, window.location.pathname);
+      debugTrace('autopay_start', {
+        checkoutMode: uiState.checkoutMode,
+        hasInjectedPhantom: hasInjectedPhantom(),
+        isCna: uiState.isCna
+      });
+      window.history.replaceState({}, document.title, uiState.checkoutMode ? '/checkout' : window.location.pathname);
       setTimeout(function() {
-        handlePay({ auto: true });
+        if (uiState.checkoutMode) {
+          if (hasInjectedPhantom()) {
+            // Best path: Phantom injected its provider — sign the tx right here.
+            runInjectedCheckoutFlow();
+          } else if (_payReq && _payReq.reference) {
+            // Phantom not injected (HTTP page or non-Phantom browser).
+            // Start polling so the portal unlocks the moment the tx lands,
+            // then show a tap-to-pay button using the solana: URI.
+            debugTrace('checkout_autopay_no_injection', {
+              hasPayUrl: Boolean(_payReq.url)
+            });
+            _startPolling(_payReq.reference);
+            showPhantomCheckoutButton(_payReq);
+          } else {
+            // _payReq not yet loaded; shouldn't happen but show a safe state.
+            debugTrace('checkout_payreq_missing', {});
+            document.getElementById('payment-screen').style.display  = 'none';
+            document.getElementById('waiting-screen').style.display  = '';
+            clearWaitingActions();
+            setPortalStatus('Pending');
+            setWaitingCopy(
+              'Opening Phantom…',
+              'Netra is preparing the payment handoff — please wait.'
+            );
+          }
+        } else {
+          handlePay({ auto: true });
+        }
       }, 80);
+    }
+
+    // ── Server-side demo auto-pay ─────────────────────────────────────
+    // When CFG.demoBuyerReady is true, the server signs + broadcasts the
+    // Solana tx automatically — no wallet app needed on the phone.
+    function runDemoPay(req) {
+      document.getElementById('payment-screen').style.display = 'none';
+      document.getElementById('waiting-screen').style.display = '';
+      setPortalStatus('Pending');
+      setWaitingCopy(
+        'Processing payment\u2026',
+        'Signing and broadcasting your Solana transaction on devnet\u2026'
+      );
+
+      fetch('/demo-pay', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reference: req.reference }),
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+          if (!d.paid) throw new Error(d.error || 'Payment failed');
+          showSuccess(d);
+        })
+        .catch(function(err) {
+          document.getElementById('payment-screen').style.display = '';
+          document.getElementById('waiting-screen').style.display = 'none';
+          setPortalStatus('Unpaid');
+          var btn = document.getElementById('pay-btn');
+          btn.disabled = false;
+          _showError('Demo pay failed: ' + err.message);
+          // Re-fetch a fresh reference for the next attempt
+          _prefetch(selectedMinutes);
+        });
     }
 
     // ── Phantom pay flow ──────────────────────────────────────────────
     function handlePay(opts) {
       opts = opts || {};
+      debugTrace('pay_tapped', {
+        auto: Boolean(opts.auto),
+        payReqReady: Boolean(_payReq && _payReq.reference),
+        checkoutMode: uiState.checkoutMode,
+        isCna: uiState.isCna,
+        demoBuyerReady: Boolean(CFG.demoBuyerReady)
+      });
       document.getElementById('error-msg').style.display = 'none';
       var btn = document.getElementById('pay-btn');
       if (!opts.auto) btn.disabled = true;
 
-      if (uiState.isCna && !opts.auto && !isSecureWalletContext()) {
-        startSafariHandoff();
-        btn.disabled = false;
+      // ── Demo mode: server signs + broadcasts — no wallet app needed ──
+      if (CFG.demoBuyerReady && _payReq && _payReq.reference) {
+        runDemoPay(_payReq);
+        return;
+      }
+      if (CFG.demoBuyerReady && !_payReq) {
+        // Prefetch hasn't finished yet; fetch on demand then demo-pay
+        var listing = currentListing();
+        document.getElementById('pay-btn-text').textContent = 'Preparing\u2026';
+        fetch('/payment-request?minutes=' + selectedMinutes + '&listingId=' + encodeURIComponent(listing.id))
+          .then(function(r) { return r.json(); })
+          .then(function(d) {
+            if (d.error) throw new Error(d.error);
+            _payReq = d;
+            runDemoPay(d);
+          })
+          .catch(function(err) {
+            _showError('Could not prepare payment: ' + err.message);
+            btn.disabled = false;
+          });
         return;
       }
 
+      if (uiState.checkoutMode && hasInjectedPhantom()) {
+        runInjectedCheckoutFlow();
+        return;
+      }
+
+      // iOS + cellular demo path: navigate directly to solana: URI.
+      // Phantom handles the solana: scheme natively and uses cellular data
+      // to broadcast the tx.  No Phantom browse deeplink needed.
       if (_payReq && _payReq.minutes === selectedMinutes) {
         launchPhantom(_payReq);
       } else {
+        debugTrace('payment_request_on_demand', {
+          minutes: selectedMinutes
+        });
         document.getElementById('pay-btn-text').textContent = 'Preparing\u2026';
         var listing = currentListing();
         fetch('/payment-request?minutes=' + selectedMinutes + '&listingId=' + encodeURIComponent(listing.id))
           .then(function(r) { return r.json(); })
           .then(function(d) {
             if (d.error) throw new Error(d.error);
+            _payReq = d;
+            debugTrace('payment_request_ready', {
+              minutes: selectedMinutes,
+              listingId: listing.id,
+              reference: d.reference
+            });
             launchPhantom(d);
           })
           .catch(function(err) {
+            debugTrace('payment_request_error', {
+              message: err && err.message ? err.message : String(err)
+            });
             _showError('Could not prepare payment: ' + err.message);
             btn.disabled = false;
             document.getElementById('pay-btn-text').textContent =
@@ -1077,6 +1688,9 @@
     }
 
     function _startPolling(reference) {
+      debugTrace('poll_start', {
+        reference: reference
+      });
       uiState.activeReference = reference;
       if (_pollTimer)   clearInterval(_pollTimer);
       if (_pollTimeout) clearTimeout(_pollTimeout);
@@ -1086,6 +1700,9 @@
           .then(function(r) { return r.json(); })
           .then(function(d) {
             if (d.paid) {
+              debugTrace('poll_paid', {
+                txHash: d.tx_hash || null
+              });
               clearInterval(_pollTimer);
               clearTimeout(_pollTimeout);
               _pollTimer = _pollTimeout = null;
@@ -1109,6 +1726,9 @@
           _pollTimer = null;
         }
         uiState.activeReference = null;
+        debugTrace('poll_timeout', {
+          reference: reference
+        });
         cancelWaiting();
         _showError('Payment timed out. Please try again.');
       }, 10 * 60 * 1000);
@@ -1117,10 +1737,12 @@
     function cancelWaiting() {
       if (_pollTimer)   { clearInterval(_pollTimer);  _pollTimer   = null; }
       if (_pollTimeout) { clearTimeout(_pollTimeout); _pollTimeout = null; }
+      clearHandoffMonitor();
       uiState.activeReference = null;
 
       document.getElementById('waiting-screen').style.display  = 'none';
       document.getElementById('payment-screen').style.display  = '';
+      clearWaitingActions();
       setPortalStatus('Unpaid');
 
       var btn = document.getElementById('pay-btn');
@@ -1128,12 +1750,20 @@
       document.getElementById('pay-btn-text').textContent =
         'Pay ' + (currentListing().pricePerMinute * selectedMinutes).toFixed(4) + ' SOL with Phantom';
 
-      // Pre-fetch a fresh reference for the next attempt
-      _prefetch(selectedMinutes);
+      // Pre-fetch a fresh reference for the next attempt (skip in checkout mode)
+      if (!uiState.checkoutMode) {
+        _prefetch(selectedMinutes);
+      }
     }
 
     // ── Success screen ─────────────────────────────────────────────────
     function showSuccess(data) {
+      clearHandoffMonitor();
+      clearWaitingActions();
+      debugTrace('payment_success', {
+        txHash: data.tx_hash || (data.session && data.session.tx_hash) || null,
+        cid: data.session && data.session.filecoin ? data.session.filecoin.latestCid || null : null
+      });
       document.getElementById('payment-screen').style.display  = 'none';
       document.getElementById('waiting-screen').style.display  = 'none';
       document.getElementById('success-screen').style.display  = 'block';
@@ -1160,7 +1790,11 @@
         updateRing();
         if (secondsLeft <= 0) {
           clearInterval(timerInterval);
-          showRefund(selectedMinutes, 0);
+          showRefund({
+            minutes_used: selectedMinutes,
+            refund_amount: 0,
+            refund_status: 'not_needed'
+          });
         }
       }, 1000);
     }
@@ -1182,28 +1816,56 @@
       clearInterval(timerInterval);
       fetch('/disconnect', { method: 'POST' })
         .then(function(r) { return r.json(); })
-        .then(function(d) { showRefund(d.minutes_used, d.refund_amount); })
-        .catch(function() { showRefund(selectedMinutes, 0); });
+        .then(function(d) { showRefund(d); })
+        .catch(function() {
+          showRefund({
+            minutes_used: selectedMinutes,
+            refund_amount: 0,
+            refund_status: 'failed',
+            refund_error: 'Netra could not confirm the refund closeout.'
+          });
+        });
     }
 
-    function showRefund(minutesUsed, refundAmount) {
+    function formatMinutes(value) {
+      return Number(value || 0).toFixed(2).replace(/\.00$/, '');
+    }
+
+    function showRefund(closeout) {
+      var minutesUsed = Number(closeout && closeout.minutes_used || 0);
+      var refundAmount = Number(closeout && closeout.refund_amount || 0);
+      var refundStatus = closeout && closeout.refund_status || (refundAmount > 0 ? 'pending_config' : 'not_needed');
+      var refundTxHash = closeout && closeout.refund_tx_hash;
+      var refundExplorerUrl = closeout && closeout.refund_explorer_url;
+      var refundError = closeout && closeout.refund_error;
+
       document.getElementById('success-screen').style.display = 'none';
       document.getElementById('refund-screen').style.display  = 'block';
       setPortalStatus('Unpaid');
 
-      document.getElementById('ref-used').textContent   = minutesUsed + ' min';
+      document.getElementById('ref-used').textContent   = formatMinutes(minutesUsed) + ' min';
       document.getElementById('ref-amount').textContent = refundAmount.toFixed(6) + ' SOL';
 
       if (refundAmount === 0) {
         document.getElementById('refund-screen').querySelector('.success-title').textContent = 'Session Complete';
-        document.getElementById('refund-sub').textContent = 'Host received full payment. Thanks for using HotspotDEX!';
+        document.getElementById('refund-sub').textContent = 'Host received full payment. Thanks for using Netra!';
+      } else if (refundStatus === 'sent') {
+        document.getElementById('refund-sub').textContent =
+          refundAmount.toFixed(6) + ' SOL was returned to your wallet on Solana devnet.';
+        if (refundTxHash && refundExplorerUrl) {
+          document.getElementById('ref-amount').innerHTML =
+            refundAmount.toFixed(6) + ' SOL &middot; <a href="' + refundExplorerUrl + '" target="_blank" rel="noreferrer">refund tx ' + refundTxHash.slice(0, 12) + '&hellip;</a>';
+        }
       } else {
         document.getElementById('refund-sub').textContent =
-          refundAmount.toFixed(6) + ' SOL has been returned to your wallet.';
+          (refundError || 'Netra recorded a prorated refund, but the wallet payout could not be broadcast yet.');
       }
     }
 
     function _showError(msg) {
+      debugTrace('ui_error', {
+        message: msg
+      });
       var el = document.getElementById('error-msg');
       el.textContent   = msg;
       el.style.display = 'block';
@@ -1240,17 +1902,70 @@
     // ── Detect iOS Captive Network Assistant (CNA) ─────────────────────
     // CNA is a limited WebKit view, so wallet handoff may need Safari.
     (function() {
-      uiState.isCna = isCaptiveIosBrowser();
+      uiState.checkoutMode = window.location.pathname === '/checkout' || initialParams.get('checkout') === '1';
+      // Show the Safari fallback hint on ALL iPhones — isCaptiveIosBrowser()
+      // uses a height heuristic that can miss the CNA popup. The hint is always
+      // useful: Safari + cellular is the most reliable demo payment path.
+      uiState.isCna = isCaptiveIosBrowser() || isIosFamily();
+      uiState.walletBrowser = requestedWalletBrowser || null;
+      debugTrace('page_init', {
+        checkoutMode: uiState.checkoutMode,
+        isCna: uiState.isCna,
+        hasInjectedPhantom: hasInjectedPhantom(),
+        secureContext: isSecureWalletContext(),
+        walletBrowser: uiState.walletBrowser
+      });
       if (uiState.isCna) {
         var hint = document.getElementById('cna-hint');
         if (hint) hint.style.display = '';
       }
       updateSafariHint(requestedListingId, requestedMinutes);
       renderWalletStatus();
+
+      if (uiState.checkoutMode && checkoutReference) {
+        _payReq = {
+          url: checkoutPayUrl || null,
+          reference: checkoutReference,
+          amount: Number.isNaN(checkoutAmount) ? null : checkoutAmount,
+          minutes: Number.isNaN(requestedMinutes) ? selectedMinutes : requestedMinutes,
+          listingId: requestedListingId || selectedListingId || CFG.listingId,
+        };
+        document.getElementById('payment-screen').style.display  = 'none';
+        document.getElementById('waiting-screen').style.display  = '';
+        setWaitingCopy(
+          'Opening Phantom…',
+          'Netra moved payment to a dedicated checkout page so the wallet handoff can complete.'
+        );
+        clearWaitingActions();
+        setPortalStatus('Pending');
+      }
     })();
 
     document.addEventListener('visibilitychange', function() {
+      debugTrace('visibility_change', {
+        hidden: document.hidden,
+        activeReference: uiState.activeReference || null
+      });
+      if (document.hidden) {
+        clearHandoffMonitor();
+        return;
+      }
       if (!document.hidden && uiState.activeReference) {
+        fetch('/payment-status?reference=' + encodeURIComponent(uiState.activeReference))
+          .then(function(r) { return r.json(); })
+          .then(function(d) {
+            if (d.paid) showSuccess(d);
+          })
+          .catch(function() {});
+      }
+    });
+
+    window.addEventListener('pageshow', function() {
+      debugTrace('pageshow', {
+        activeReference: uiState.activeReference || null,
+        hasInjectedPhantom: hasInjectedPhantom()
+      });
+      if (uiState.activeReference) {
         fetch('/payment-status?reference=' + encodeURIComponent(uiState.activeReference))
           .then(function(r) { return r.json(); })
           .then(function(d) {

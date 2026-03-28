@@ -10,6 +10,7 @@ const {
   formatSol,
   generateReference,
   normalizeWallet,
+  sendSolanaRefund,
   verifySolanaPayment,
 } = require("./solana");
 
@@ -31,11 +32,12 @@ function normalizeSSID(value) {
 
   const withoutPrefix = trimmed
     .replace(/^\u26a1\s*/u, "")
+    .replace(/^Netra[-\s]*/i, "")
     .replace(/^HDX[-\s]*/i, "")
     .replace(/^hotspotdex[-\s]*/i, "");
 
   const slug = withoutPrefix.replace(/[^a-zA-Z0-9]/g, "").slice(0, 16);
-  return slug ? `⚡HDX-${slug}` : "";
+  return slug ? `⚡Netra-${slug}` : "";
 }
 
 function sortNewestFirst(items, key = "createdAt") {
@@ -46,7 +48,7 @@ const DEMO_HOTSPOTS = [
   {
     id: "demo-fishtown-commons",
     name: "Fishtown Commons",
-    ssid: "⚡HDX-Fishtown",
+    ssid: "⚡Netra-Fishtown",
     location: "Philadelphia, PA · Fishtown",
     pricePerMinute: 0.001,
     signalStrength: 5,
@@ -59,7 +61,7 @@ const DEMO_HOTSPOTS = [
   {
     id: "demo-old-city-relay",
     name: "Old City Relay",
-    ssid: "⚡HDX-OldCity",
+    ssid: "⚡Netra-OldCity",
     location: "Philadelphia, PA · Old City",
     pricePerMinute: 0.0008,
     signalStrength: 4,
@@ -72,7 +74,7 @@ const DEMO_HOTSPOTS = [
   {
     id: "demo-university-city-mesh",
     name: "University City Mesh",
-    ssid: "⚡HDX-UCity",
+    ssid: "⚡Netra-UCity",
     location: "Philadelphia, PA · University City",
     pricePerMinute: 0.0012,
     signalStrength: 3,
@@ -85,7 +87,7 @@ const DEMO_HOTSPOTS = [
   {
     id: "demo-riverfront-ap",
     name: "Riverfront AP",
-    ssid: "⚡HDX-Riverfront",
+    ssid: "⚡Netra-Riverfront",
     location: "Philadelphia, PA · Penn's Landing",
     pricePerMinute: 0.0006,
     signalStrength: 4,
@@ -100,6 +102,7 @@ const DEMO_HOTSPOTS = [
 function createHotspotService({
   dataDir,
   verifyPayment = verifySolanaPayment,
+  sendRefund = sendSolanaRefund,
   now = () => Date.now(),
   localIp = "localhost",
   hostWallet = process.env.SOLANA_WALLET || null,
@@ -512,7 +515,7 @@ function createHotspotService({
           payTo: intent.payTo,
           resource,
           description,
-          memo: `hotspotdex:${intent.reference}`,
+          memo: `netra:${intent.reference}`,
           extra: {
             reference: intent.reference,
             listingId: intent.listingId,
@@ -578,14 +581,52 @@ function createHotspotService({
     if (!session) return null;
 
     const elapsedMs = Math.max(0, now() - new Date(session.started_at).getTime());
-    const minutesUsed = Math.min(
-      session.minutes_purchased,
-      Math.max(1, Math.ceil(elapsedMs / 60000))
+    const purchasedMs = Math.max(1, Number(session.minutes_purchased || 0) * 60 * 1000);
+    const clampedElapsedMs = Math.min(elapsedMs, purchasedMs);
+    const totalLamports = Math.max(
+      0,
+      Number(session.amount_lamports || 0) ||
+        Math.round(
+          Number(session.minutes_purchased || 0) *
+            Number(pickListing(session.listing_id).pricePerMinute || ratePerMinute) *
+            LAMPORTS_PER_SOL
+        )
     );
-    const minutesRemaining = Math.max(0, session.minutes_purchased - minutesUsed);
-    const refundLamports = Math.round(
-      minutesRemaining * Number(pickListing(session.listing_id).pricePerMinute || ratePerMinute) * LAMPORTS_PER_SOL
+    const usedLamports = Math.min(
+      totalLamports,
+      Math.round((clampedElapsedMs / purchasedMs) * totalLamports)
     );
+    const refundLamports = Math.max(0, totalLamports - usedLamports);
+    const minutesUsed = Number((clampedElapsedMs / 60000).toFixed(2));
+    const minutesRemaining = Number(
+      Math.max(0, (purchasedMs - clampedElapsedMs) / 60000).toFixed(2)
+    );
+    let refundResult = {
+      status: refundLamports > 0 ? "pending_config" : "not_needed",
+      signature: null,
+      explorerUrl: null,
+      sourceWallet: null,
+      error: null,
+    };
+
+    if (refundLamports > 0) {
+      try {
+        refundResult = {
+          ...refundResult,
+          ...(await sendRefund({
+            destination: session.buyer_wallet,
+            amountLamports: refundLamports,
+            memo: `netra-refund:${session.session_id}`,
+          })),
+        };
+      } catch (error) {
+        refundResult = {
+          ...refundResult,
+          status: "failed",
+          error: error.message,
+        };
+      }
+    }
 
     session.minutes_used = minutesUsed;
     session.ended_at = ts();
@@ -595,17 +636,26 @@ function createHotspotService({
       amountSol: formatSol(refundLamports),
       minutesRemaining,
       reason,
+      status: refundResult.status,
+      txHash: refundResult.signature || null,
+      explorerUrl: refundResult.explorerUrl || null,
+      sourceWallet: refundResult.sourceWallet || null,
+      error: refundResult.error || null,
     };
-    addTransition(session, minutesRemaining > 0 ? "refunded" : "disconnected", {
+    const refundCompleted = refundLamports > 0 && refundResult.status === "sent";
+    addTransition(session, refundCompleted ? "refunded" : "disconnected", {
       reason,
       minutesUsed,
       minutesRemaining,
+      refundStatus: refundResult.status,
+      refundTxHash: refundResult.signature || null,
     });
 
     await persistSessionArtifact(session, "session-closeout", {
       reason,
       minutesUsed,
       minutesRemaining,
+      refundStatus: refundResult.status,
     });
     await refreshListingArtifacts(pickListing(session.listing_id));
     persist();
@@ -615,6 +665,10 @@ function createHotspotService({
       minutes_remaining: minutesRemaining,
       refund_amount: formatSol(refundLamports),
       refund_lamports: refundLamports,
+      refund_status: refundResult.status,
+      refund_tx_hash: refundResult.signature || null,
+      refund_explorer_url: refundResult.explorerUrl || null,
+      refund_error: refundResult.error || null,
       session,
     };
   }

@@ -77,6 +77,11 @@ export interface ProxySession {
     amountSol: number;
     minutesRemaining: number;
     reason: string;
+    status?: string;
+    txHash?: string | null;
+    explorerUrl?: string | null;
+    sourceWallet?: string | null;
+    error?: string | null;
   } | null;
   filecoin: {
     latestCid: string | null;
@@ -104,6 +109,10 @@ export interface EarlyExitResult {
   minutes_remaining: number;
   refund_amount: number;
   refund_lamports?: number;
+  refund_status?: string;
+  refund_tx_hash?: string | null;
+  refund_explorer_url?: string | null;
+  refund_error?: string | null;
   session: ProxySession;
 }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# HotspotDEX — pf firewall setup  (run once, needs sudo)
+# Netra — pf firewall setup  (run once, needs sudo)
 #
 # What this does:
 #   1. Detects the Mac's Internet Sharing bridge interface (bridge100)
@@ -27,7 +27,9 @@ fi
 
 SOLANA_RPC_URL="${SOLANA_RPC:-https://api.devnet.solana.com}"
 RPC_HOST="$(printf '%s\n' "$SOLANA_RPC_URL" | sed -E 's#^[a-zA-Z]+://([^/:]+).*#\1#')"
-ALLOW_HOSTS="${RPC_HOST:-api.devnet.solana.com}"
+PHANTOM_HOST="phantom.app"
+EXTRA_ALLOW_HOSTS="${EXTRA_PREPAY_ALLOW_HOSTS:-}"
+ALLOW_HOSTS="${RPC_HOST:-api.devnet.solana.com},${PHANTOM_HOST}${EXTRA_ALLOW_HOSTS:+,${EXTRA_ALLOW_HOSTS}}"
 ALLOW_IPS=""
 
 echo "Resolving wallet/RPC allowlist..."
@@ -119,9 +121,25 @@ echo "Hotspot subnet   : $HOTSPOT_SUBNET"
 # ── Write NAT anchor (redirect rules) ─────────────────────────────────────────
 
 NAT_ANCHOR="/etc/pf.anchors/hotspotdex-nat"
+ALLOW_HTTPS_BYPASS=""
+if [ -n "$ALLOW_IPS" ]; then
+  ALLOW_HTTPS_BYPASS="no rdr on $BRIDGE proto tcp from any to { $ALLOW_IPS } port 443"
+fi
 
 cat > "$NAT_ANCHOR" << EOF
-# HotspotDEX NAT anchor — redirect rules
+# Netra NAT anchor — redirect rules
+
+# Paid clients: bypass ALL redirects so they can browse freely.
+# Uses a separate table name (paid_bypass) to avoid pf namespace collision
+# with the <allowed_clients> table already defined in the filter anchor.
+# The portal server adds/removes IPs here via:
+#   pfctl -a hotspotdex-nat -t paid_bypass -T add <ip>
+table <paid_bypass> persist
+no rdr on $BRIDGE from <paid_bypass>
+
+$([ -n "$ALLOW_HTTPS_BYPASS" ] && printf '%s\n' "# Keep Phantom + Solana RPC reachable before payment so wallet handoff and transaction broadcast are not captive-trapped.")
+$ALLOW_HTTPS_BYPASS
+
 # Redirect DNS queries from hotspot clients to our DNS server (no-root port)
 rdr pass on $BRIDGE proto udp from any to any port 53 -> $PORTAL_IP port 5300
 
@@ -147,8 +165,8 @@ WALLET_TABLE=""
 WALLET_RULES=""
 if [ -n "$ALLOW_IPS" ]; then
   WALLET_TABLE="table <wallet_allow_hosts> const { $ALLOW_IPS }"
-  WALLET_RULES=$(cat <<EOF
-# Allow only Solana payment RPC connectivity for unpaid users.
+WALLET_RULES=$(cat <<EOF
+# Allow only Phantom + Solana payment connectivity for unpaid users.
 pass quick inet proto tcp from <hotspot_net> to <wallet_allow_hosts> port 443 keep state
 pass quick inet proto udp from <hotspot_net> to <wallet_allow_hosts> port 443 keep state
 EOF
@@ -156,10 +174,10 @@ EOF
 fi
 
 cat > "$FILTER_ANCHOR" << EOF
-# HotspotDEX filter anchor
+# Netra filter anchor
 #
 # Table of devices that have paid — populated dynamically by the portal server
-# via: pfctl -t allowed_clients -T add <ip>
+# via: pfctl -a hotspotdex -t allowed_clients -T add <ip>
 table <allowed_clients> persist
 table <portal_host>     const { $PORTAL_IP }
 table <hotspot_net>     const { $HOTSPOT_SUBNET }
@@ -196,10 +214,10 @@ PF_CONF="/etc/pf.conf"
 MARKER="# HotspotDEX anchors"
 
 if grep -q "hotspotdex" "$PF_CONF" 2>/dev/null; then
-  echo "pf.conf already contains HotspotDEX anchors — rewriting to ensure correct placement"
+  echo "pf.conf already contains Netra anchors — rewriting to ensure correct placement"
 fi
 
-# Always write a clean, known-good pf.conf with HotspotDEX anchors in the
+# Always write a clean, known-good pf.conf with Netra anchors in the
 # correct position (rdr-anchor after nat-anchor "com.apple/*", filter anchor
 # after the com.apple anchor block). This avoids the regex-patching approach
 # which can break the file if the comment block layout differs.
@@ -256,7 +274,7 @@ fi
 # ── Verify ────────────────────────────────────────────────────────────────────
 
 echo ""
-echo "Current HotspotDEX anchor rules:"
+echo "Current Netra anchor rules:"
 pfctl -a hotspotdex -sr 2>/dev/null || echo "(anchor not yet populated — starts when portal server runs)"
 
 echo ""

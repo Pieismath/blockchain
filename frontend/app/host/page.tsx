@@ -18,6 +18,18 @@ import { buildHotspotSsid, normalizeHotspotSsid, SSID_PREFIX } from "@/lib/ssid"
 
 type Phase = "form" | "submitting" | "done";
 
+function deriveHostIp(explicitHostIp: string) {
+  const trimmed = explicitHostIp.trim();
+  if (trimmed) return trimmed;
+  if (typeof window === "undefined") return undefined;
+
+  const host = window.location.hostname;
+  if (!host || host === "localhost" || host === "127.0.0.1") {
+    return undefined;
+  }
+  return host;
+}
+
 export default function HostPage() {
   const [phase, setPhase] = useState<Phase>("form");
   const [listing, setListing] = useState<HotspotListing | null>(null);
@@ -55,7 +67,9 @@ export default function HostPage() {
     setPhase("submitting");
     setError(null);
     try {
+      const resolvedHostIp = deriveHostIp(form.hostIp);
       const result = await createListing({
+        id: "local-hotspot",
         name: form.name,
         ssid: form.ssid,
         location: form.location,
@@ -63,9 +77,11 @@ export default function HostPage() {
         downloadMbps: parseInt(form.downloadMbps),
         uploadMbps: parseInt(form.uploadMbps),
         signalStrength: parseInt(form.signalStrength),
-        host: form.host || "anonymous",
+        host: form.host || "Netra Test Account",
         hostWallet: form.hostWallet || undefined,
-        hostIp: form.hostIp || undefined,
+        hostIp: resolvedHostIp,
+        real: true,
+        demo: false,
       });
       setListing(result);
       setPhase("done");
@@ -84,8 +100,8 @@ export default function HostPage() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>
           </div>
-          <h1 className="text-2xl font-bold text-white">Hotspot Listed!</h1>
-          <p className="text-slate-400">Your hotspot is now ready for both captive-portal buyers and x402 clients.</p>
+          <h1 className="text-2xl font-bold text-white">Primary Hotspot Updated</h1>
+          <p className="text-slate-400">Your live Netra hotspot is now ready for both captive-portal buyers and x402 clients.</p>
         </div>
 
         {/* Listing summary */}
@@ -104,7 +120,7 @@ export default function HostPage() {
 
         {/* QR code linking to marketplace */}
         <div className="flex flex-col items-center gap-3 rounded-2xl border border-white/8 bg-[#0f0f1a] p-5">
-          <p className="text-sm text-slate-400">Show this QR code to open the captive portal</p>
+          <p className="text-sm text-slate-400">Show this QR code to open the captive portal for your live hotspot</p>
           <QrCode value={listing.portalUrl ?? `http://localhost:3000/marketplace`} size={180} />
           {listing.portalUrl && (
             <p className="text-xs text-slate-600 font-mono break-all text-center">{listing.portalUrl}</p>
@@ -147,14 +163,14 @@ export default function HostPage() {
         <p className="text-xs uppercase tracking-[0.28em] text-emerald-300/70">Host Setup</p>
         <h1 className="mt-3 text-3xl font-bold text-white">Launch a programmable hotspot</h1>
         <p className="mt-2 text-slate-400">
-          Publish one coherent hotspot listing for humans and agents. Solana handles payment proof, and every session rolls into a CID-backed host reputation record.
+          Publish the live hotspot that buyers will actually connect to. Solana handles payment proof, and every session rolls into a CID-backed host reputation record.
         </p>
       </div>
 
       {/* How it works */}
       <div className="mb-6 space-y-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-sm text-emerald-100">
         <p className="font-semibold text-emerald-50">What judges will see</p>
-        <p>Your hotspot appears as <strong className="font-mono text-white">{SSID_PREFIX}YourName</strong>, blocks free roaming until payment clears, shows a Solana transaction proof, and leaves a portable Filecoin-style receipt trail in the dashboard.</p>
+        <p>Your hotspot updates the primary live listing, appears as <strong className="font-mono text-white">{SSID_PREFIX}YourName</strong>, blocks free roaming until payment clears, shows a Solana transaction proof, and leaves a portable Filecoin-style receipt trail in the dashboard.</p>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-4">
@@ -190,7 +206,7 @@ export default function HostPage() {
           />
         </Field>
 
-        <Field label="Your Mac's local IP" hint="Run: ipconfig getifaddr en0  (leave blank to auto-detect)">
+        <Field label="Hotspot IP" hint="Leave blank to use the current Netra page host automatically">
           <input
             value={form.hostIp}
             onChange={set("hostIp")}

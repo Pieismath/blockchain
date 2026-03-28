@@ -63,7 +63,7 @@ async function maybeUploadWithSynapse({ bytes, metadata }) {
       chain,
       transport,
       withCDN: process.env.FILECOIN_WITH_CDN === "true",
-      source: process.env.FILECOIN_SOURCE || "hotspot-dex",
+      source: process.env.FILECOIN_SOURCE || "netra",
     });
 
     const result = await synapse.storage.upload(new Blob([bytes]), {

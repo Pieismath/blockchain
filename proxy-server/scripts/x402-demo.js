@@ -69,7 +69,7 @@ async function payChallenge({ payTo, amount, extra, memo }, payer) {
     new TransactionInstruction({
       keys: [{ pubkey: reference, isSigner: false, isWritable: false }],
       programId: MEMO_PROGRAM_ID,
-      data: Buffer.from(memo || `hotspotdex:${extra.reference}`),
+      data: Buffer.from(memo || `netra:${extra.reference}`),
     })
   );
 

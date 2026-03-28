@@ -1,7 +1,7 @@
 {
   "name": "hotspot-dex-contracts",
   "version": "1.0.0",
-  "description": "HotspotDEX escrow smart contracts (Hardhat + Solidity)",
+  "description": "Netra escrow smart contracts (Hardhat + Solidity)",
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",

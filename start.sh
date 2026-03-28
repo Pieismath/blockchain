@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# HotspotDEX — start the Solana-first hotspot demo stack
+# Netra — start the Solana-first hotspot demo stack
 # Usage: ./start.sh
 
 set -e
@@ -44,7 +44,7 @@ for dir in $DIRS; do
 done
 
 export HOTSPOT_NAME="${HOTSPOT_NAME:-Netra Test Account}"
-export HOTSPOT_SSID="${HOTSPOT_SSID:-⚡HDX-Netra}"
+export HOTSPOT_SSID="${HOTSPOT_SSID:-⚡Netra-Guest}"
 export HOTSPOT_LISTING_ID="${HOTSPOT_LISTING_ID:-local-hotspot}"
 export RATE_PER_MIN="${RATE_PER_MIN:-0.001}"
 export HOTSPOT_DOWN="${HOTSPOT_DOWN:-100}"
@@ -55,12 +55,21 @@ export HOST_HANDLE="${HOST_HANDLE:-Netra Test Account}"
 
 export SOLANA_WALLET="${SOLANA_WALLET:-}"
 export SOLANA_RPC="${SOLANA_RPC:-https://api.devnet.solana.com}"
+export SECURE_PORTAL_ORIGIN="${SECURE_PORTAL_ORIGIN:-https://captive.apple.com}"
+# Demo burner wallet — server signs + broadcasts the Solana tx automatically.
+# Fund this address with devnet SOL before the demo.
+# Burner pubkey: 6Hvij4HAnHJuSR6tg52mBWzJiFGFEd5rD2cpYFUf86gu
+export DEMO_BUYER_PRIVKEY="${DEMO_BUYER_PRIVKEY:-5QiujvJwA4htB1eUqYYmbeKu42fScJ6JSAnKimTzLPkbSNDFpdYK7RrWJPWnGeKnEFWuVpPCCmBUbaFHrA1cWUpm}"
+# Default the refund signer to the funded demo burner so early-disconnect
+# refunds actually broadcast on devnet (self-transfer is valid on Solana).
+export SOLANA_REFUND_SECRET_KEY="${SOLANA_REFUND_SECRET_KEY:-$DEMO_BUYER_PRIVKEY}"
+export EXTRA_PREPAY_ALLOW_HOSTS="${EXTRA_PREPAY_ALLOW_HOSTS:-}"
 
 export FILECOIN_NETWORK="${FILECOIN_NETWORK:-calibration}"
 export FILECOIN_RPC_URL="${FILECOIN_RPC_URL:-}"
 export FILECOIN_PRIVATE_KEY="${FILECOIN_PRIVATE_KEY:-}"
 export FILECOIN_WITH_CDN="${FILECOIN_WITH_CDN:-false}"
-export FILECOIN_SOURCE="${FILECOIN_SOURCE:-hotspot-dex}"
+export FILECOIN_SOURCE="${FILECOIN_SOURCE:-netra}"
 
 echo "[1/3] Starting proxy server on :8080 (control API :3001)..."
 (cd "$PROXY" && \
@@ -75,6 +84,7 @@ echo "[1/3] Starting proxy server on :8080 (control API :3001)..."
   HOST_HANDLE="$HOST_HANDLE" \
   SOLANA_WALLET="$SOLANA_WALLET" \
   SOLANA_RPC="$SOLANA_RPC" \
+  SOLANA_REFUND_SECRET_KEY="$SOLANA_REFUND_SECRET_KEY" \
   FILECOIN_NETWORK="$FILECOIN_NETWORK" \
   FILECOIN_RPC_URL="$FILECOIN_RPC_URL" \
   FILECOIN_PRIVATE_KEY="$FILECOIN_PRIVATE_KEY" \
@@ -117,6 +127,9 @@ if $CAPTIVE_MODE; then
     HOTSPOT_LOCATION="$HOTSPOT_LOCATION" \
     SOLANA_WALLET="$SOLANA_WALLET" \
     SOLANA_RPC="$SOLANA_RPC" \
+    SECURE_PORTAL_ORIGIN="$SECURE_PORTAL_ORIGIN" \
+    EXTRA_PREPAY_ALLOW_HOSTS="$EXTRA_PREPAY_ALLOW_HOSTS" \
+    DEMO_BUYER_PRIVKEY="$DEMO_BUYER_PRIVKEY" \
     CONTROL_API="http://localhost:3001" \
     node server.js) > /tmp/portal.log 2>&1 &
   PORTAL_PID=$!
@@ -127,7 +140,7 @@ LOCAL_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/n
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  HotspotDEX is running"
+echo "  Netra is running"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  Marketplace   →  http://localhost:3000/marketplace"
 echo "  Host setup    →  http://localhost:3000/host"
@@ -151,11 +164,25 @@ if $CAPTIVE_MODE; then
   echo "  ──────────────────────────────────────────"
   echo "  SSID          →  $HOTSPOT_SSID"
   echo "  Portal URL    →  http://$PORTAL_IP:8888"
+  if [ "$SECURE_PORTAL_ORIGIN" != "https://captive.apple.com" ]; then
+    echo "  Secure checkout →  $SECURE_PORTAL_ORIGIN"
+    if [ -n "$EXTRA_PREPAY_ALLOW_HOSTS" ]; then
+      echo "  Prepay allowlist →  $EXTRA_PREPAY_ALLOW_HOSTS"
+    fi
+  fi
   echo "  Solana RPC    →  $SOLANA_RPC"
   if [ -n "$SOLANA_WALLET" ]; then
     echo "  Solana wallet →  ${SOLANA_WALLET:0:8}…"
   else
     echo "  Solana wallet →  (not set — run: SOLANA_WALLET=<address> ./start.sh)"
+  fi
+  if [ -n "$DEMO_BUYER_PRIVKEY" ]; then
+    echo "  Demo auto-pay →  ENABLED (burner: 6Hvij4HAnHJuSR6tg52mBWzJiFGFEd5rD2cpYFUf86gu)"
+  fi
+  if [ -n "$SOLANA_REFUND_SECRET_KEY" ]; then
+    echo "  Refund signer →  custom"
+  else
+    echo "  Refund signer →  Netra demo treasury (devnet auto-top-up)"
   fi
   if [ -n "$FILECOIN_PRIVATE_KEY" ]; then
     echo "  Filecoin      →  Synapse enabled on $FILECOIN_NETWORK"

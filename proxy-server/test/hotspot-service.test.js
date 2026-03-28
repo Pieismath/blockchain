@@ -83,3 +83,47 @@ test("returns a 402-style challenge and fulfills agent purchases", async () => {
   assert.equal(result.session.session_type, "agent");
   assert.equal(result.session.tx_hash, "agent-sig");
 });
+
+test("disconnecting early refunds the unused prorated amount", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "hotspot-service-"));
+  let current = 1_700_000_000_000;
+  const service = createHotspotService({
+    dataDir: tmp,
+    localIp: "192.168.2.1",
+    hostWallet: "5oNDL3swdJJF1g9DzJiZ4ynHXgszjAEpUkxVYejchzrY",
+    now: () => current,
+    sendRefund: async ({ destination, amountLamports }) => {
+      assert.equal(destination, "buyer-wallet");
+      return {
+        status: "sent",
+        signature: "refund-sig",
+        explorerUrl: "https://explorer.solana.com/tx/refund-sig?cluster=devnet",
+        sourceWallet: "refund-wallet",
+      };
+    },
+  });
+
+  const session = await service.createSession({
+    ip: "192.168.2.55",
+    minutes: 10,
+    txHash: "pay-sig",
+    paymentReference: "ref-456",
+    paymentSource: "captive-portal",
+    paymentExplorerUrl: "https://explorer.solana.com/tx/pay-sig?cluster=devnet",
+    listingId: "local-hotspot",
+    sessionType: "human",
+    buyerWallet: "buyer-wallet",
+    source: "captive-portal",
+  });
+
+  current += 2.5 * 60 * 1000;
+  const result = await service.disconnectSessionByIp(session.ip);
+
+  assert.equal(result.minutes_used, 2.5);
+  assert.equal(result.minutes_remaining, 7.5);
+  assert.equal(result.refund_amount, 0.0075);
+  assert.equal(result.refund_status, "sent");
+  assert.equal(result.refund_tx_hash, "refund-sig");
+  assert.equal(result.session.status, "refunded");
+  assert.equal(result.session.refund.txHash, "refund-sig");
+});

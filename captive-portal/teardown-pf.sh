@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# HotspotDEX — remove pf rules and restore original config
+# Netra — remove pf rules and restore original config
 # Usage: sudo ./teardown-pf.sh
 
 set -euo pipefail
@@ -22,7 +22,7 @@ if [ -f "$BACKUP" ]; then
   pfctl -f "$PF_CONF"
   echo "Restored $PF_CONF from backup"
 else
-  echo "No backup found — manually remove the HotspotDEX block from $PF_CONF"
+  echo "No backup found — manually remove the Netra block from $PF_CONF"
 fi
 
 rm -f /etc/pf.anchors/hotspotdex /etc/pf.anchors/hotspotdex-nat

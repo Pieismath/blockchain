@@ -1,5 +1,5 @@
 /**
- * HotspotDEX Captive Portal Server
+ * Netra Captive Portal Server
  *
  * Runs two services:
  *   Port 5300 — DNS server (pf redirects :53 → here)
@@ -30,10 +30,12 @@ const express   = require("express");
 const cors      = require("cors");
 const path      = require("path");
 const https     = require("https");
+const fs        = require("fs");
 const { v4: uuidv4 } = require("uuid");
 const { execSync, exec } = require("child_process");
 const { randomBytes } = require("crypto");
 const bs58      = require("bs58");
+const QRCode    = require("qrcode");
 const dns2      = require("dns2");
 const { Packet } = dns2;
 
@@ -44,6 +46,47 @@ const HTTPS_PORT = 8443;   // pf rdr :443 → :8443
 const DNS_PORT  = 5300;   // pf rdr :53  → :5300
 const CONTROL_API  = process.env.CONTROL_API  ?? "http://localhost:3001";
 const RATE_PER_MIN = parseFloat(process.env.RATE_PER_MIN ?? "0.001"); // SOL per minute
+const SECURE_PORTAL_ORIGIN = process.env.SECURE_PORTAL_ORIGIN ?? "https://captive.apple.com";
+const PHANTOM_BROWSE_ORIGIN = "https://phantom.app";
+const EXTRA_PREPAY_ALLOW_HOSTS = String(process.env.EXTRA_PREPAY_ALLOW_HOSTS || "")
+  .split(",")
+  .map((host) => host.trim().toLowerCase())
+  .filter(Boolean);
+
+let solanaWeb3;
+try {
+  solanaWeb3 = require("@solana/web3.js");
+} catch {
+  solanaWeb3 = require(path.join(__dirname, "..", "proxy-server", "node_modules", "@solana", "web3.js"));
+}
+
+const {
+  Connection,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+  TransactionInstruction,
+  Keypair,
+  sendAndConfirmTransaction,
+} = solanaWeb3;
+
+// ─── Demo buyer wallet (server-side auto-pay for demos) ───────────────────────
+// Set DEMO_BUYER_PRIVKEY (base58) to enable one-tap payment without opening
+// any wallet app.  The server signs + broadcasts the Solana tx automatically.
+const DEMO_BUYER_PRIVKEY = process.env.DEMO_BUYER_PRIVKEY ?? null;
+let demoBuyerKeypair = null;
+if (DEMO_BUYER_PRIVKEY) {
+  try {
+    demoBuyerKeypair = Keypair.fromSecretKey(bs58.decode(DEMO_BUYER_PRIVKEY));
+    console.log(`[Portal] Demo buyer wallet: ${demoBuyerKeypair.publicKey.toBase58()}`);
+  } catch (err) {
+    console.error("[Portal] DEMO_BUYER_PRIVKEY is set but invalid:", err.message);
+  }
+}
+
+const MEMO_PROGRAM_ID = new PublicKey(
+  "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"
+);
 
 // ─── Solana config ─────────────────────────────────────────────────────────────
 const SOLANA_RPC    = process.env.SOLANA_RPC    ?? "https://api.devnet.solana.com";
@@ -55,13 +98,38 @@ const SOLANA_RPC_HOST = (() => {
     return "api.devnet.solana.com";
   }
 })();
-const DNS_ALLOWLIST = new Set([SOLANA_RPC_HOST]);
+const PHANTOM_BROWSE_HOST = (() => {
+  try {
+    return new URL(PHANTOM_BROWSE_ORIGIN).hostname;
+  } catch {
+    return "phantom.app";
+  }
+})();
+const SECURE_PORTAL_HOST = (() => {
+  try {
+    return new URL(SECURE_PORTAL_ORIGIN).hostname;
+  } catch {
+    return "";
+  }
+})();
+const DNS_ALLOWLIST = new Set([
+  SOLANA_RPC_HOST,
+  PHANTOM_BROWSE_HOST,
+  ...EXTRA_PREPAY_ALLOW_HOSTS,
+]);
+
+function isConfiguredSecureCheckoutOrigin() {
+  return Boolean(SECURE_PORTAL_ORIGIN) &&
+    SECURE_PORTAL_ORIGIN !== "https://captive.apple.com" &&
+    SECURE_PORTAL_HOST &&
+    !/^(localhost|127\.0\.0\.1)$/i.test(SECURE_PORTAL_HOST);
+}
 
 // ─── Hotspot config (set by start.sh or env vars) ────────────────────────────
 // These are served to the captive portal page via GET /config
 const HOTSPOT_CONFIG = {
   name:            process.env.HOTSPOT_NAME     ?? "WiFi Hotspot",
-  ssid:            process.env.HOTSPOT_SSID     ?? "⚡HDX-Hotspot",
+  ssid:            process.env.HOTSPOT_SSID     ?? "⚡Netra-Hotspot",
   listingId:       process.env.HOTSPOT_LISTING_ID ?? "local-hotspot",
   rate:            RATE_PER_MIN,
   currency:        "SOL",
@@ -107,12 +175,56 @@ function challengeToSolanaPayUrl(accept) {
   const amountSol = (Number(accept.amount || 0) / 1e9).toFixed(6);
   const params = new URLSearchParams({
     amount: amountSol,
-    label: "HotspotDEX",
+    label: "Netra",
     message: accept.description || "Hotspot session purchase",
     reference: accept.extra.reference,
-    memo: accept.memo || `hotspotdex:${accept.extra.reference}`,
+    memo: accept.memo || `netra:${accept.extra.reference}`,
   });
   return `solana:${accept.payTo}?${params.toString()}`;
+}
+
+function buildCheckoutUrl({ reference, listingId, minutes, payUrl, amountSol }) {
+  // Prefer a dedicated trusted HTTPS portal origin when configured. This is the
+  // only same-device path that gives Phantom a secure context instead of
+  // http://192.168.x.x. Otherwise fall back to the local HTTP portal.
+  const base = isConfiguredSecureCheckoutOrigin()
+    ? SECURE_PORTAL_ORIGIN
+    : `http://${PORTAL_IP}:${HTTP_PORT}`;
+  const url = new URL("/checkout", base);
+  url.searchParams.set("checkout", "1");
+  url.searchParams.set("autopay", "1");
+  if (reference) url.searchParams.set("reference", reference);
+  if (listingId) url.searchParams.set("listingId", listingId);
+  if (minutes) url.searchParams.set("minutes", String(minutes));
+  // Include the solana: payment URI so the checkout page can show a
+  // tap-to-pay button even when Phantom has not injected its provider.
+  if (payUrl) url.searchParams.set("payUrl", payUrl);
+  if (amountSol !== undefined && amountSol !== null) {
+    url.searchParams.set("amount", String(amountSol));
+  }
+  return url.toString();
+}
+
+function buildPhantomBrowseUrl(checkoutUrl) {
+  // ref = local portal origin so Phantom knows where the dApp lives.
+  const ref = `http://${PORTAL_IP}:${HTTP_PORT}`;
+  return `${PHANTOM_BROWSE_ORIGIN}/ul/browse/${encodeURIComponent(checkoutUrl)}?ref=${encodeURIComponent(ref)}`;
+}
+
+function buildPendingSolanaPayUrl(reference, pending) {
+  if (!pending) return null;
+  if (pending.solanaPayUrl) return pending.solanaPayUrl;
+  if (!pending.payTo) return null;
+
+  const amountSol = (Number(pending.amountLamports || 0) / 1e9).toFixed(6);
+  const params = new URLSearchParams({
+    amount: amountSol,
+    label: "Netra",
+    message: pending.description || "Buy hotspot access programmatically with Solana.",
+    reference,
+    memo: pending.memo || `netra:${reference}`,
+  });
+  return `solana:${pending.payTo}?${params.toString()}`;
 }
 
 /** Detect the Mac's IP on the shared bridge (Internet Sharing interface). */
@@ -157,10 +269,18 @@ const PORTAL_IP = process.env.PORTAL_IP ?? detectPortalIP();
 
 /**
  * Set of IPs that have an active paid session.
- * Used to return "Success" to Apple's captive-portal probe so iOS
- * automatically closes the CNA after payment.
+ * Used for DNS forwarding, catch-all redirect, and request logging.
+ * Set immediately when payment confirms so DNS and HTTP redirects work right away.
  */
 const paidIPs = new Set();
+
+/**
+ * Set of IPs whose captive-portal probes should return "Success".
+ * Delayed ~8 s after paidIPs so the CNA popup stays open long enough
+ * for the user to see the success screen / countdown timer.
+ * Only used in the probe endpoint handlers.
+ */
+const captiveReleasedIPs = new Set();
 
 /**
  * Pending Solana Pay sessions waiting for on-chain confirmation.
@@ -168,6 +288,7 @@ const paidIPs = new Set();
  * Value: { ip, minutes, created_at, activated }
  */
 const pendingPayments = new Map();
+const portalDebugEvents = [];
 
 // ─── Solana Pay helpers ───────────────────────────────────────────────────────
 
@@ -204,24 +325,31 @@ async function findReferenceOnChain(referenceBase58) {
 // ─── Firewall helpers (pfctl) ─────────────────────────────────────────────────
 
 function pfAdd(ip) {
-  return new Promise((resolve, reject) => {
-    exec(`sudo pfctl -t allowed_clients -T add ${ip}`, (err, _, stderr) => {
+  return new Promise((resolve) => {
+    const cmd = [
+      `sudo pfctl -a hotspotdex -t allowed_clients -T add ${ip}`,
+      `sudo pfctl -a hotspotdex-nat -t paid_bypass -T add ${ip}`,
+    ].join(" ; ");
+    exec(cmd, (err, _, stderr) => {
       if (err) {
-        console.error(`[pf] WARN: could not add ${ip} — ${stderr.trim()}`);
+        console.error(`[pf] WARN: could not add ${ip} — ${(stderr || "").trim()}`);
         // Don't hard-fail; session is still tracked in memory
-        resolve();
       } else {
         console.log(`[pf] Opened firewall for ${ip}`);
-        resolve();
       }
+      resolve();
     });
   });
 }
 
 function pfRemove(ip) {
   return new Promise((resolve) => {
-    exec(`sudo pfctl -t allowed_clients -T delete ${ip}`, (err, _, stderr) => {
-      if (err) console.error(`[pf] WARN: could not remove ${ip} — ${stderr.trim()}`);
+    const cmd = [
+      `sudo pfctl -a hotspotdex -t allowed_clients -T delete ${ip}`,
+      `sudo pfctl -a hotspotdex-nat -t paid_bypass -T delete ${ip}`,
+    ].join(" ; ");
+    exec(cmd, (err, _, stderr) => {
+      if (err) console.error(`[pf] WARN: could not remove ${ip} — ${(stderr || "").trim()}`);
       else console.log(`[pf] Closed firewall for ${ip}`);
       resolve();
     });
@@ -234,6 +362,17 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
+const portalIndexPath = path.join(__dirname, "public", "index.html");
+const solanaWeb3BrowserPath = path.join(
+  __dirname,
+  "..",
+  "proxy-server",
+  "node_modules",
+  "@solana",
+  "web3.js",
+  "lib",
+  "index.iife.js"
+);
 
 /**
  * Extract real client IP, stripping IPv4-mapped IPv6 prefix (::ffff:).
@@ -255,17 +394,56 @@ app.use((req, res, next) => {
   next();
 });
 
+app.post("/debug-event", (req, res) => {
+  const event = {
+    ts: new Date().toISOString(),
+    ip: clientIP(req),
+    stage: String(req.body?.stage || "unknown"),
+    path: String(req.body?.path || ""),
+    reference: req.body?.reference ? String(req.body.reference) : null,
+    detail: req.body?.detail && typeof req.body.detail === "object" ? req.body.detail : {},
+  };
+
+  portalDebugEvents.push(event);
+  if (portalDebugEvents.length > 250) portalDebugEvents.shift();
+
+  const refLabel = event.reference ? ` ref=${event.reference.slice(0, 8)}…` : "";
+  const detailLabel = Object.keys(event.detail).length ? ` ${JSON.stringify(event.detail)}` : "";
+  console.log(`[PortalDebug] ${event.ip} ${event.stage}${refLabel}${detailLabel}`);
+  res.json({ ok: true });
+});
+
+app.get("/debug-events", (_req, res) => {
+  res.json({ events: portalDebugEvents.slice(-100) });
+});
+
 // ── GET /config — serve hotspot info to the payment page ──────────────────────
 app.get("/config", (req, res) => {
   res.json({
     ...HOTSPOT_CONFIG,
     rpcHost: SOLANA_RPC_HOST,
+    securePortalOrigin: SECURE_PORTAL_ORIGIN,
+    // Tell the portal UI whether server-side auto-pay is available so it can
+    // skip the wallet-app launch entirely and call /demo-pay instead.
+    demoBuyerReady: Boolean(demoBuyerKeypair),
+    demoBuyerAddress: demoBuyerKeypair ? demoBuyerKeypair.publicKey.toBase58() : null,
   });
 });
 
 app.get("/marketplace-data", async (_req, res) => {
   const listings = await fetchMarketplace();
   res.json({ listings });
+});
+
+app.get("/checkout", (_req, res) => {
+  res.sendFile(portalIndexPath);
+});
+
+app.get("/vendor/solana-web3.js", (_req, res) => {
+  if (!fs.existsSync(solanaWeb3BrowserPath)) {
+    return res.status(404).type("text/plain").send("solana web3 bundle not found");
+  }
+  res.type("application/javascript").sendFile(solanaWeb3BrowserPath);
 });
 
 app.get("/wallet-status", (req, res) => {
@@ -275,6 +453,40 @@ app.get("/wallet-status", (req, res) => {
     rpcHost: SOLANA_RPC_HOST,
     connectionMode: "portal-only-rpc-allowlist",
   });
+});
+
+app.get("/payment-qr.svg", async (req, res) => {
+  const reference = String(req.query.reference || "");
+  if (!reference) {
+    return res.status(400).type("text/plain").send("reference required");
+  }
+
+  const pending = pendingPayments.get(reference);
+  if (!pending) {
+    return res.status(404).type("text/plain").send("unknown or expired reference");
+  }
+
+  const payUrl = buildPendingSolanaPayUrl(reference, pending);
+  if (!payUrl) {
+    return res.status(404).type("text/plain").send("payment link unavailable");
+  }
+
+  try {
+    const svg = await QRCode.toString(payUrl, {
+      type: "svg",
+      margin: 1,
+      width: 280,
+      color: {
+        dark: "#0f172a",
+        light: "#ffffff",
+      },
+    });
+    res.set("Cache-Control", "no-store");
+    res.type("image/svg+xml").send(svg);
+  } catch (error) {
+    console.error("[Portal] payment-qr error:", error.message);
+    res.status(500).type("text/plain").send("could not generate qr");
+  }
 });
 
 // ── GET /payment-request?minutes=N ────────────────────────────────────────────
@@ -313,10 +525,16 @@ app.get("/payment-request", (req, res) => {
       if (!accept) throw new Error("x402 challenge missing payment terms");
 
       const ref = accept.extra.reference;
+      const solanaPayUrl = challengeToSolanaPayUrl(accept);
       pendingPayments.set(ref, {
         ip,
         minutes,
         listingId,
+        payTo: accept.payTo,
+        amountLamports: Number(accept.amount || 0),
+        memo: accept.memo || `netra:${ref}`,
+        description: accept.description || "Buy hotspot access programmatically with Solana.",
+        solanaPayUrl,
         created_at: Date.now(),
         activated: false,
       });
@@ -324,12 +542,20 @@ app.get("/payment-request", (req, res) => {
       for (const [key, val] of pendingPayments) {
         if (Date.now() - val.created_at > 10 * 60 * 1000) pendingPayments.delete(key);
       }
-
+      const checkoutUrl = buildCheckoutUrl({
+        reference: ref,
+        listingId,
+        minutes,
+        payUrl: solanaPayUrl,
+        amountSol: Number(accept.amount || 0) / 1e9,
+      });
       console.log(
         `[Portal] x402 challenge: ${ip} ${minutes}min ${accept.amountDisplay} listing=${listingId} ref=${ref.slice(0, 8)}…`
       );
       res.json({
-        url: challengeToSolanaPayUrl(accept),
+        url: solanaPayUrl,
+        checkoutUrl,
+        phantomBrowseUrl: buildPhantomBrowseUrl(checkoutUrl),
         reference: ref,
         amount: Number(accept.amount || 0) / 1e9,
         minutes,
@@ -340,6 +566,262 @@ app.get("/payment-request", (req, res) => {
     .catch((err) => {
       res.status(500).json({ error: err.message });
     });
+});
+
+app.get("/payment-transaction", async (req, res) => {
+  const reference = String(req.query.reference || "");
+  const buyerWallet = String(req.query.buyerWallet || "");
+  if (!reference || !buyerWallet) {
+    return res.status(400).json({ error: "reference and buyerWallet are required" });
+  }
+
+  const pending = pendingPayments.get(reference);
+  if (!pending) {
+    return res.status(404).json({ error: "unknown or expired reference" });
+  }
+
+  try {
+    const connection = new Connection(SOLANA_RPC, "confirmed");
+    const latest = await connection.getLatestBlockhash("confirmed");
+    const buyer = new PublicKey(buyerWallet);
+    const destination = new PublicKey(pending.payTo);
+    const referenceKey = new PublicKey(reference);
+
+    // Build transfer instruction and attach the reference key to it.
+    // Memo V2 requires all accounts in its keys[] to be signers — putting the
+    // reference there causes "missing required signature".  The System Program
+    // ignores extra read-only keys, and getSignaturesForAddress() still finds
+    // the transaction by reference because the key appears in the instruction.
+    const transferIx = SystemProgram.transfer({
+      fromPubkey: buyer,
+      toPubkey: destination,
+      lamports: Number(pending.amountLamports || 0),
+    });
+    transferIx.keys.push({ pubkey: referenceKey, isSigner: false, isWritable: false });
+
+    const tx = new Transaction();
+    tx.feePayer = buyer;
+    tx.recentBlockhash = latest.blockhash;
+    tx.add(transferIx);
+    tx.add(
+      new TransactionInstruction({
+        programId: MEMO_PROGRAM_ID,
+        keys: [], // empty — Memo V2 requires signers; reference lives in transferIx
+        data: Buffer.from(pending.memo || `netra:${reference}`),
+      })
+    );
+
+    const serialized = tx.serialize({
+      requireAllSignatures: false,
+      verifySignatures: false,
+    });
+
+    res.json({
+      reference,
+      serializedTransaction: Buffer.from(serialized).toString("base64"),
+      amountSol: Number(pending.amountLamports || 0) / 1e9,
+      payTo: pending.payTo,
+      blockhash: latest.blockhash,
+      lastValidBlockHeight: latest.lastValidBlockHeight,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+async function fulfillPendingPayment({ reference, signature, buyerWallet }) {
+  const pending = pendingPayments.get(reference);
+  if (!pending) {
+    throw new Error("unknown or expired reference");
+  }
+
+  if (pending.activated && pending.sessionData) {
+    return pending.sessionData;
+  }
+
+  const { ip, minutes, listingId } = pending;
+  let lastError = null;
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      const response = await fetch(`${CONTROL_API}/x402/sessions/purchase`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Payment-Signature": signature,
+        },
+        body: JSON.stringify({
+          ip,
+          listingId,
+          minutes,
+          reference,
+          tier: "standard",
+          buyerWallet: buyerWallet || null,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || `HTTP ${response.status}`);
+      }
+
+      pending.activated = true;
+      pending.signature = signature;
+      pending.buyerWallet = buyerWallet || null;
+      pending.sessionData = payload;
+
+      await pfAdd(ip);
+      paidIPs.add(ip); // immediate — DNS forwarding + catch-all handler work right away
+
+      // Delay the captive-probe "Success" response so the portal success screen
+      // stays visible for ~8 s before iOS auto-dismisses the CNA popup.
+      // pfAdd + paidIPs already opened DNS and the firewall immediately.
+      const CAPTIVE_GRACE_MS = 8000;
+      setTimeout(() => captiveReleasedIPs.add(ip), CAPTIVE_GRACE_MS);
+
+      setTimeout(async () => {
+        paidIPs.delete(ip);
+        captiveReleasedIPs.delete(ip);
+        await pfRemove(ip);
+        pendingPayments.delete(reference);
+        console.log(`[Portal] Session expired for ${ip}`);
+      }, minutes * 60 * 1000 + CAPTIVE_GRACE_MS);
+
+      return payload;
+    } catch (error) {
+      lastError = error;
+      if (/Transaction not found|missing the required x402 payment reference/i.test(error.message)) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        continue;
+      }
+      break;
+    }
+  }
+
+  throw lastError || new Error("Could not verify payment");
+}
+
+app.post("/payment-finalize", async (req, res) => {
+  const reference = String(req.body?.reference || "");
+  const signature = String(req.body?.signature || "");
+  const buyerWallet = req.body?.buyerWallet ? String(req.body.buyerWallet) : null;
+
+  if (!reference || !signature) {
+    return res.status(400).json({ error: "reference and signature are required" });
+  }
+
+  try {
+    const sessionData = await fulfillPendingPayment({ reference, signature, buyerWallet });
+    res.json({
+      paid: true,
+      session: sessionData.session,
+      seconds_granted: sessionData.seconds_granted || 0,
+      tx_hash: signature,
+      explorer_url:
+        sessionData.payment?.explorerUrl ||
+        `https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+    });
+  } catch (error) {
+    console.error("[Portal] payment-finalize error:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── POST /demo-pay — server-side auto-pay for demos ───────────────────────────
+//
+// Requires DEMO_BUYER_PRIVKEY env var (base58 secret key).
+// The server builds the Solana transaction, signs it with the demo keypair,
+// and broadcasts it to devnet — a real on-chain tx with no wallet app needed.
+// Body: { reference } — must match a pending payment created by /payment-request.
+
+app.post("/demo-pay", async (req, res) => {
+  if (!demoBuyerKeypair) {
+    return res.status(503).json({
+      error: "Demo auto-pay not enabled. Set DEMO_BUYER_PRIVKEY in start.sh.",
+    });
+  }
+
+  const reference = String(req.body?.reference || "");
+  if (!reference) {
+    return res.status(400).json({ error: "reference is required" });
+  }
+
+  const pending = pendingPayments.get(reference);
+  if (!pending) {
+    return res.status(404).json({ error: "unknown or expired reference — refresh and try again" });
+  }
+
+  if (pending.activated && pending.sessionData) {
+    // Already paid (e.g. double-tap). Return the cached session.
+    return res.json({
+      paid: true,
+      session: pending.sessionData.session,
+      seconds_granted: pending.sessionData.seconds_granted || pending.minutes * 60,
+      tx_hash: pending.signature,
+      explorer_url: `https://explorer.solana.com/tx/${pending.signature}?cluster=devnet`,
+    });
+  }
+
+  try {
+    const connection = new Connection(SOLANA_RPC, "confirmed");
+    const latest = await connection.getLatestBlockhash("confirmed");
+    const buyer = demoBuyerKeypair.publicKey;
+    const destination = new PublicKey(pending.payTo);
+    const referenceKey = new PublicKey(reference);
+
+    // Reference key goes on the transfer instruction, NOT the memo instruction.
+    // Memo V2 requires all listed accounts to sign; referenceKey can't sign.
+    const transferIx = SystemProgram.transfer({
+      fromPubkey: buyer,
+      toPubkey: destination,
+      lamports: Number(pending.amountLamports || 0),
+    });
+    transferIx.keys.push({ pubkey: referenceKey, isSigner: false, isWritable: false });
+
+    const tx = new Transaction();
+    tx.feePayer = buyer;
+    tx.recentBlockhash = latest.blockhash;
+    tx.add(transferIx);
+    tx.add(
+      new TransactionInstruction({
+        programId: MEMO_PROGRAM_ID,
+        keys: [], // empty — reference is in transferIx so getSignaturesForAddress works
+        data: Buffer.from(pending.memo || `netra:${reference}`),
+      })
+    );
+
+    tx.sign(demoBuyerKeypair);
+    const rawTx = tx.serialize();
+    const signature = await connection.sendRawTransaction(rawTx, {
+      skipPreflight: false,
+      preflightCommitment: "confirmed",
+    });
+
+    console.log(`[Portal] Demo-pay broadcast: sig=${signature.slice(0, 10)}… ref=${reference.slice(0, 8)}…`);
+
+    // Wait up to 30s for confirmation then fulfil the session
+    await connection.confirmTransaction(
+      { signature, blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight },
+      "confirmed"
+    );
+
+    const sessionData = await fulfillPendingPayment({
+      reference,
+      signature,
+      buyerWallet: buyer.toBase58(),
+    });
+
+    console.log(`[Portal] Demo-pay confirmed: ip=${pending.ip} sig=${signature.slice(0, 10)}…`);
+    res.json({
+      paid: true,
+      session: sessionData.session,
+      seconds_granted: sessionData.seconds_granted || pending.minutes * 60,
+      tx_hash: signature,
+      explorer_url: `https://explorer.solana.com/tx/${signature}?cluster=devnet`,
+    });
+  } catch (err) {
+    console.error("[Portal] demo-pay error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── GET /payment-status?reference=<base58> ────────────────────────────────────
@@ -355,60 +837,40 @@ app.get("/payment-status", async (req, res) => {
   if (!pending) return res.status(404).json({ error: "unknown or expired reference" });
 
   // Already activated — just confirm
-  if (pending.activated) return res.json({ paid: true, already_active: true });
+  if (pending.activated) {
+    return res.json({
+      paid: true,
+      already_active: true,
+      session: pending.sessionData?.session || null,
+      seconds_granted:
+        pending.sessionData?.seconds_granted ||
+        pending.minutes * 60,
+      tx_hash:
+        pending.signature ||
+        pending.sessionData?.payment?.transaction ||
+        pending.sessionData?.session?.tx_hash ||
+        null,
+      explorer_url:
+        pending.sessionData?.payment?.explorerUrl ||
+        (pending.signature
+          ? `https://explorer.solana.com/tx/${pending.signature}?cluster=devnet`
+          : null),
+    });
+  }
 
   try {
     const sigInfo = await findReferenceOnChain(ref);
+    const sessionData = await fulfillPendingPayment({
+      reference: ref,
+      signature: sigInfo.signature,
+      buyerWallet: pending.buyerWallet || null,
+    });
 
-    // Mark activated immediately to prevent double-processing
-    pending.activated = true;
-
-    const { ip, minutes, listingId } = pending;
-
-    // Open the firewall for this IP
-    await pfAdd(ip);
-
-    // Fulfill the same x402 payment challenge the agent flow uses.
-    let sessionData;
-    try {
-      const r = await fetch(`${CONTROL_API}/x402/sessions/purchase`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Payment-Signature": sigInfo.signature,
-        },
-        body: JSON.stringify({
-          ip,
-          listingId,
-          minutes,
-          reference: ref,
-          tier: "standard",
-        }),
-      });
-      sessionData = await r.json();
-      if (!r.ok) throw new Error(sessionData.error || `HTTP ${r.status}`);
-    } catch (error) {
-      paidIPs.delete(ip);
-      await pfRemove(ip);
-      pendingPayments.delete(ref);
-      return res.status(500).json({ error: error.message });
-    }
-
-    paidIPs.add(ip);
-
-    // Auto-expire: close firewall when session ends
-    setTimeout(async () => {
-      paidIPs.delete(ip);
-      await pfRemove(ip);
-      pendingPayments.delete(ref);
-      console.log(`[Portal] Session expired for ${ip}`);
-    }, minutes * 60 * 1000);
-
-    console.log(`[Portal] Payment confirmed ${ip} sig=${sigInfo.signature.slice(0, 10)}…`);
+    console.log(`[Portal] Payment confirmed ${pending.ip} sig=${sigInfo.signature.slice(0, 10)}…`);
     res.json({
       paid: true,
       session: sessionData.session,
-      seconds_granted: sessionData.session?.seconds_remaining || minutes * 60,
+      seconds_granted: sessionData.seconds_granted || pending.minutes * 60,
       tx_hash: sigInfo.signature,
       explorer_url:
         sessionData.payment?.explorerUrl ||
@@ -449,7 +911,7 @@ const APPLE_PROBES = [
 
 function appleProbeResponse(req, res) {
   const ip = clientIP(req);
-  if (paidIPs.has(ip)) {
+  if (captiveReleasedIPs.has(ip)) {
     res.set("Content-Type", "text/html");
     res.send("<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
   } else {
@@ -466,7 +928,7 @@ app.all(APPLE_PROBES, appleProbeResponse);
 // clients3.google.com, play.googleapis.com — all DNS-resolved to PORTAL_IP
 app.all(["/generate_204", "/gen_204", "/generate204", "/connectivity-check.html"], (req, res) => {
   const ip = clientIP(req);
-  if (paidIPs.has(ip)) {
+  if (captiveReleasedIPs.has(ip)) {
     res.status(204).send();
   } else {
     redirectToPortal(res);
@@ -478,7 +940,7 @@ app.all(["/generate_204", "/gen_204", "/generate204", "/connectivity-check.html"
 // http://www.msftncsi.com/ncsi.txt               (Windows 7/8)
 app.all(["/connecttest.txt", "/ncsi.txt", "/redirect"], (req, res) => {
   const ip = clientIP(req);
-  if (paidIPs.has(ip)) {
+  if (captiveReleasedIPs.has(ip)) {
     res.set("Content-Type", "text/plain");
     res.send("Microsoft Connect Test");
   } else {
@@ -489,7 +951,7 @@ app.all(["/connecttest.txt", "/ncsi.txt", "/redirect"], (req, res) => {
 // Kindle Fire / Amazon devices
 app.get(["/kindle-wifi/wifistub.html", "/kindle-wifi/wifiredirect.html"], (req, res) => {
   const ip = clientIP(req);
-  if (paidIPs.has(ip)) {
+  if (captiveReleasedIPs.has(ip)) {
     res.set("Content-Type", "text/html");
     res.send("<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
   } else {
@@ -532,15 +994,19 @@ app.post("/activate", async (req, res) => {
     if (!r.ok) throw new Error(`Control API: HTTP ${r.status}`);
     const data = await r.json();
 
-    // 3. Mark IP as paid (so Apple probe returns "Success")
+    // 3. Mark IP as paid — DNS forwarding + catch-all work immediately.
+    //    Captive probe "Success" is delayed so the user sees the success screen.
     paidIPs.add(ip);
+    const CAPTIVE_GRACE_MS = 8000;
+    setTimeout(() => captiveReleasedIPs.add(ip), CAPTIVE_GRACE_MS);
 
     // 4. Auto-expire: close firewall when session time runs out
     setTimeout(async () => {
       paidIPs.delete(ip);
+      captiveReleasedIPs.delete(ip);
       await pfRemove(ip);
       console.log(`[Portal] Session expired for ${ip}`);
-    }, minutes * 60 * 1000);
+    }, minutes * 60 * 1000 + CAPTIVE_GRACE_MS);
 
     console.log(`[Portal] Activated ${minutes} min session for ${ip} (tx: ${tx_hash.slice(0, 10)}…)`);
     res.json({ ok: true, session: data.session, seconds_granted: data.seconds_granted });
@@ -549,6 +1015,7 @@ app.post("/activate", async (req, res) => {
     console.error(`[Portal] Activate failed for ${ip}:`, err.message);
     // Roll back firewall if we opened it
     paidIPs.delete(ip);
+    captiveReleasedIPs.delete(ip);
     await pfRemove(ip);
     res.status(500).json({ error: err.message });
   }
@@ -558,6 +1025,7 @@ app.post("/activate", async (req, res) => {
 app.post("/disconnect", async (req, res) => {
   const ip = clientIP(req);
   paidIPs.delete(ip);
+  captiveReleasedIPs.delete(ip);
   await pfRemove(ip);
 
   try {

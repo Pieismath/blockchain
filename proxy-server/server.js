@@ -1,5 +1,5 @@
 /**
- * HotspotDEX proxy + control plane
+ * Netra proxy + control plane
  *
  * Ports:
  *   8080 - traffic gateway. Unpaid clients stay blocked.
@@ -118,7 +118,7 @@ const proxyServer = http.createServer((req, res) => {
       "Content-Type": "text/html",
     });
     res.end(
-      `<html><body>HotspotDEX requires payment before internet access. <a href="${portalUrl}">Open the captive portal</a>.</body></html>`
+      `<html><body>Netra requires payment before internet access. <a href="${portalUrl}">Open the captive portal</a>.</body></html>`
     );
     return;
   }

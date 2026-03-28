@@ -5,7 +5,7 @@ export const LISTINGS: HotspotListing[] = [
   {
     id: "local-hotspot",
     name: "Netra Test Account",
-    ssid: "⚡HDX-Netra",
+    ssid: "⚡Netra-Netra",
     location: "Philadelphia, PA · Demo hotspot",
     pricePerMinute: 0.001,
     signalStrength: 5,
@@ -31,7 +31,7 @@ export const LISTINGS: HotspotListing[] = [
   {
     id: "demo-fishtown-commons",
     name: "Fishtown Commons",
-    ssid: "⚡HDX-Fishtown",
+    ssid: "⚡Netra-Fishtown",
     location: "Philadelphia, PA · Fishtown",
     pricePerMinute: 0.0008,
     signalStrength: 4,
@@ -57,7 +57,7 @@ export const LISTINGS: HotspotListing[] = [
   {
     id: "demo-old-city-relay",
     name: "Old City Relay",
-    ssid: "⚡HDX-OldCity",
+    ssid: "⚡Netra-OldCity",
     location: "Philadelphia, PA · Old City",
     pricePerMinute: 0.0012,
     signalStrength: 3,
@@ -74,7 +74,7 @@ export const LISTINGS: HotspotListing[] = [
   {
     id: "demo-university-city-mesh",
     name: "University City Mesh",
-    ssid: "⚡HDX-UCity",
+    ssid: "⚡Netra-UCity",
     location: "Philadelphia, PA · University City",
     pricePerMinute: 0.0006,
     signalStrength: 4,
@@ -91,7 +91,7 @@ export const LISTINGS: HotspotListing[] = [
   {
     id: "demo-riverfront-ap",
     name: "Riverfront AP",
-    ssid: "⚡HDX-Riverfront",
+    ssid: "⚡Netra-Riverfront",
     location: "Philadelphia, PA · Penn's Landing",
     pricePerMinute: 0.0007,
     signalStrength: 4,

@@ -25,9 +25,7 @@ export default function Header() {
   return (
     <header className="sticky top-0 z-50 border-b border-white/5 bg-[#07070f]/90 backdrop-blur-md">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-        {/* Logo */}
         <Link href="/" className="flex items-center gap-2 group">
-          {/* WiFi / signal icon */}
           <svg
             className="w-7 h-7 text-emerald-400 group-hover:text-emerald-300 transition-colors"
             viewBox="0 0 24 24"
@@ -42,13 +40,9 @@ export default function Header() {
             <path d="M8.53 16.11a6 6 0 0 1 6.95 0" />
             <circle cx="12" cy="20" r="1" fill="currentColor" />
           </svg>
-          <span className="text-lg font-bold tracking-tight">
-            <span className="text-white">Hotspot</span>
-            <span className="text-emerald-300">DEX</span>
-          </span>
+          <span className="text-lg font-bold tracking-tight text-white">Netra</span>
         </Link>
 
-        {/* Nav */}
         <nav className="flex items-center gap-1">
           {navLink("/marketplace", "Marketplace")}
           {navLink("/host", "List Hotspot")}

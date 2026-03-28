@@ -10,7 +10,7 @@ import type { HotspotListing } from "@/lib/types";
 import HotspotCard from "@/components/HotspotCard";
 
 export const metadata = {
-  title: "Marketplace — HotspotDEX",
+  title: "Marketplace — Netra",
 };
 
 async function fetchListings(): Promise<HotspotListing[]> {
@@ -91,7 +91,7 @@ export default async function MarketplacePage() {
             <div>
               <p className="font-medium text-white">Human checkout</p>
               <p className="mt-0.5 text-sky-50/75">
-                Join a <span className="font-mono text-sky-100">⚡HDX-</span> hotspot and the captive portal blocks browsing until Phantom payment clears.
+                Join a <span className="font-mono text-sky-100">⚡Netra-</span> hotspot and the captive portal blocks browsing until Phantom payment clears.
               </p>
             </div>
           </div>

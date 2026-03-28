@@ -2,7 +2,7 @@
 
 ## 0:00 - 0:20 Pitch
 
-"HotspotDEX is a programmable paid hotspot. Humans pay through a real captive portal, agents pay through an x402 API on Solana, and every session produces a CID-backed proof artifact for portable reputation."
+"Netra is a programmable paid hotspot. Humans pay through a real captive portal, agents pay through an x402 API on Solana, and every session produces a CID-backed proof artifact for portable reputation."
 
 ## 0:20 - 1:10 Human Flow
 
@@ -10,7 +10,7 @@
    - [frontend/app/marketplace/page.tsx](/Users/jasonfang/Desktop/hotspot-dex/frontend/app/marketplace/page.tsx)
 2. Click a hotspot card and open the access modal.
 3. Explain:
-   - buyer joins `⚡HDX-...`
+   - buyer joins `⚡Netra-...`
    - no free roaming before payment
    - captive portal opens
 4. If running the live hotspot demo on a phone:

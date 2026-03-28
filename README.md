@@ -1,6 +1,6 @@
-# HotspotDEX
+# Netra
 
-HotspotDEX is a programmable paid hotspot for humans and AI agents. A host shares internet through a real Wi-Fi hotspot, traffic stays blocked until payment is verified, and every session produces a portable receipt with a Solana payment proof plus a CID-backed audit artifact for long-term reputation and service history.
+Netra is a programmable paid hotspot for humans and AI agents. A host shares internet through a real Wi-Fi hotspot, traffic stays blocked until payment is verified, and every session produces a portable receipt with a Solana payment proof plus a CID-backed audit artifact for long-term reputation and service history.
 
 ## What It Does
 
@@ -138,7 +138,7 @@ This keeps the UI + control plane running without pf/captive-portal setup.
 1. Enable Internet Sharing on your Mac.
 2. Run `sudo ./captive-portal/setup-pf.sh` once.
 3. Start the stack with `./start.sh`.
-4. Join the `⚡HDX-...` hotspot from a phone.
+4. Join the `⚡Netra-...` hotspot from a phone.
 5. Observe that normal browsing is blocked.
 6. Pay in the captive portal using Phantom on Solana devnet.
 7. Observe that internet access opens and the dashboard shows the tx hash plus a CID-backed receipt.

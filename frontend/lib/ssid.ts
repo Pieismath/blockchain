@@ -1,4 +1,4 @@
-const SSID_PREFIX = "\u26a1HDX-";
+const SSID_PREFIX = "\u26a1Netra-";
 
 function toSlug(value: string): string {
   return value.replace(/[^a-zA-Z0-9]/g, "").slice(0, 16);
@@ -10,6 +10,7 @@ export function normalizeHotspotSsid(value: string): string {
 
   const withoutPrefix = trimmed
     .replace(/^\u26a1\s*/u, "")
+    .replace(/^Netra[-\s]*/i, "")
     .replace(/^HDX[-\s]*/i, "")
     .replace(/^hotspotdex[-\s]*/i, "");
 

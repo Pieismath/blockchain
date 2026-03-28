@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 /**
  * @title  HotspotEscrow
- * @notice Escrow contract for the HotspotDEX peer-to-peer WiFi marketplace.
+ * @notice Escrow contract for the Netra peer-to-peer WiFi marketplace.
  *
  * Flow
  * ----

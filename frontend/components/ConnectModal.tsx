@@ -33,6 +33,10 @@ function formatDate(value?: string | null) {
   });
 }
 
+function formatMinutes(value?: number) {
+  return Number(value || 0).toFixed(2).replace(/\.00$/, "");
+}
+
 export default function ConnectModal({ listing, onClose }: Props) {
   const [duration, setDuration] = useState<(typeof DURATION_OPTIONS)[number]>(10);
   const [session, setSession] = useState<ProxySession | null>(null);
@@ -274,8 +278,8 @@ export default function ConnectModal({ listing, onClose }: Props) {
                 </div>
               ) : (
                 <div className="mt-4 space-y-3 text-sm text-slate-300">
-                  <p>Your traffic stays blocked until payment clears for this device IP.</p>
-                  <p className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-amber-100">
+                <p>Your traffic stays blocked until payment clears for this device IP.</p>
+                <p className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-amber-100">
                     Judge shortcut: the captive portal handles human checkout; the x402 endpoint demonstrates the programmatic flow without any browser UI.
                   </p>
                 </div>
@@ -305,9 +309,41 @@ export default function ConnectModal({ listing, onClose }: Props) {
                   Closeout
                 </div>
                 <p className="mt-2">
-                  Session ended after {refund.minutes_used} minute(s). Refund:{" "}
-                  <span className="font-semibold">{refund.refund_amount.toFixed(4)} SOL</span>
+                  Session ended after {formatMinutes(refund.minutes_used)} minute(s).{" "}
+                  {refund.refund_amount > 0 ? (
+                    refund.refund_status === "sent" ? (
+                      <>
+                        Prorated refund sent:{" "}
+                        <span className="font-semibold">{refund.refund_amount.toFixed(4)} SOL</span>
+                      </>
+                    ) : (
+                      <>
+                        Prorated refund due:{" "}
+                        <span className="font-semibold">{refund.refund_amount.toFixed(4)} SOL</span>
+                      </>
+                    )
+                  ) : (
+                    <>Session completed with no refund due.</>
+                  )}
                 </p>
+                {refund.refund_status === "sent" && refund.refund_explorer_url && (
+                  <p className="mt-2">
+                    Refund tx:{" "}
+                    <a
+                      href={refund.refund_explorer_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-mono text-indigo-50 underline underline-offset-4"
+                    >
+                      {(refund.refund_tx_hash || "").slice(0, 12)}...
+                    </a>
+                  </p>
+                )}
+                {refund.refund_status && refund.refund_status !== "sent" && refund.refund_amount > 0 && (
+                  <p className="mt-2 text-indigo-100/80">
+                    {refund.refund_error || "Netra could not broadcast the refund transfer yet."}
+                  </p>
+                )}
               </div>
             )}
 

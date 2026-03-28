@@ -83,6 +83,7 @@ export function getListings(): Promise<HotspotListing[]> {
 
 /** Register a new hotspot listing. */
 export function createListing(payload: {
+  id?: string;
   name: string;
   ssid: string;
   location: string;
@@ -93,6 +94,8 @@ export function createListing(payload: {
   host: string;
   hostWallet?: string;
   hostIp?: string;
+  real?: boolean;
+  demo?: boolean;
 }): Promise<HotspotListing> {
   return apiFetch<HotspotListing>("/api/listings", {
     method: "POST",
