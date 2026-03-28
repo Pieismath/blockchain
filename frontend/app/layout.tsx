@@ -3,8 +3,9 @@ import "./globals.css";
 import Header from "@/components/Header";
 
 export const metadata: Metadata = {
-  title: "HotspotDEX — Peer-to-peer WiFi marketplace",
-  description: "Buy and sell WiFi access on-chain. Pay per minute, refund if you leave early.",
+  title: "HotspotDEX — Solana-paid programmable hotspot",
+  description:
+    "Paid hotspot access for humans and agents with Solana receipts, x402 APIs, and Filecoin-backed session proofs.",
 };
 
 export default function RootLayout({

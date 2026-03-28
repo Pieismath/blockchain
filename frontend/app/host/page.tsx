@@ -27,11 +27,12 @@ export default function HostPage() {
     name: "",
     ssid: "",
     location: "",
-    pricePerMinute: "0.01",
+    pricePerMinute: "0.001",
     downloadMbps: "100",
     uploadMbps: "50",
     signalStrength: "4",
     host: "",
+    hostWallet: "",
     hostIp: "",
   });
 
@@ -63,6 +64,7 @@ export default function HostPage() {
         uploadMbps: parseInt(form.uploadMbps),
         signalStrength: parseInt(form.signalStrength),
         host: form.host || "anonymous",
+        hostWallet: form.hostWallet || undefined,
         hostIp: form.hostIp || undefined,
       });
       setListing(result);
@@ -75,7 +77,7 @@ export default function HostPage() {
 
   if (phase === "done" && listing) {
     return (
-      <div className="max-w-lg mx-auto px-4 py-16 space-y-6">
+      <div className="mx-auto max-w-lg space-y-6 px-4 py-16">
         <div className="text-center space-y-2">
           <div className="w-16 h-16 rounded-full bg-emerald-500/10 flex items-center justify-center mx-auto">
             <svg className="w-8 h-8 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -83,22 +85,26 @@ export default function HostPage() {
             </svg>
           </div>
           <h1 className="text-2xl font-bold text-white">Hotspot Listed!</h1>
-          <p className="text-slate-400">Your network is now live on the marketplace.</p>
+          <p className="text-slate-400">Your hotspot is now ready for both captive-portal buyers and x402 clients.</p>
         </div>
 
         {/* Listing summary */}
-        <div className="bg-[#0f0f1a] border border-white/8 rounded-2xl p-5 space-y-3 text-sm">
+        <div className="space-y-3 rounded-2xl border border-white/8 bg-[#0f0f1a] p-5 text-sm">
           <Row label="Name" value={listing.name} />
           <Row label="SSID" value={listing.ssid ?? "—"} mono />
           <Row label="Location" value={listing.location} />
-          <Row label="Price" value={`${listing.pricePerMinute} ETH / min`} />
+          <Row label="Price" value={`${listing.pricePerMinute} SOL / min`} />
           <Row label="Speed" value={`${listing.downloadMbps}↓ / ${listing.uploadMbps}↑ Mbps`} />
+          {listing.hostWallet && <Row label="Host wallet" value={listing.hostWallet} mono />}
           {listing.hostIp && <Row label="Proxy" value={`${listing.hostIp}:8080`} mono />}
+          {listing.filecoin?.latestReputationCid && (
+            <Row label="Reputation CID" value={listing.filecoin.latestReputationCid} mono />
+          )}
         </div>
 
         {/* QR code linking to marketplace */}
-        <div className="bg-[#0f0f1a] border border-white/8 rounded-2xl p-5 flex flex-col items-center gap-3">
-          <p className="text-sm text-slate-400">Show this QR code — buyers scan to pay</p>
+        <div className="flex flex-col items-center gap-3 rounded-2xl border border-white/8 bg-[#0f0f1a] p-5">
+          <p className="text-sm text-slate-400">Show this QR code to open the captive portal</p>
           <QrCode value={listing.portalUrl ?? `http://localhost:3000/marketplace`} size={180} />
           {listing.portalUrl && (
             <p className="text-xs text-slate-600 font-mono break-all text-center">{listing.portalUrl}</p>
@@ -106,13 +112,14 @@ export default function HostPage() {
         </div>
 
         {/* Setup instructions */}
-        <div className="bg-[#0f0f1a] border border-white/8 rounded-2xl p-5 space-y-4">
+        <div className="space-y-4 rounded-2xl border border-white/8 bg-[#0f0f1a] p-5">
           <h3 className="text-white font-semibold">Setup checklist</h3>
           <ol className="space-y-3 text-sm text-slate-400 list-none">
             <Step n={1} text="Enable Internet Sharing on your Mac (share your connection over WiFi)" />
             <Step n={2} text={`Set your WiFi network name to: "${listing?.ssid ?? form.ssid}"`} />
             <Step n={3} text="Run: ./start.sh (starts everything automatically)" />
-            <Step n={4} text="Buyers see your hotspot in their phone's WiFi settings → connect → payment page pops up → they pay → internet opens" />
+            <Step n={4} text="Human buyers connect, pay in Phantom, and only then get internet access." />
+            <Step n={5} text="Agent buyers can call the x402 endpoint to purchase access programmatically on Solana devnet." />
           </ol>
         </div>
 
@@ -135,18 +142,19 @@ export default function HostPage() {
   }
 
   return (
-    <div className="max-w-lg mx-auto px-4 py-12">
+    <div className="mx-auto max-w-lg px-4 py-12">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-white">Lease Your WiFi</h1>
-        <p className="text-slate-400 mt-2">
-          Share your internet, earn ETH per minute. Buyers see your hotspot in their phone&apos;s WiFi settings and pay via captive portal.
+        <p className="text-xs uppercase tracking-[0.28em] text-emerald-300/70">Host Setup</p>
+        <h1 className="mt-3 text-3xl font-bold text-white">Launch a programmable hotspot</h1>
+        <p className="mt-2 text-slate-400">
+          Publish one coherent hotspot listing for humans and agents. Solana handles payment proof, and every session rolls into a CID-backed host reputation record.
         </p>
       </div>
 
       {/* How it works */}
-      <div className="bg-indigo-500/10 border border-indigo-500/20 rounded-xl p-4 mb-6 text-sm text-indigo-300 space-y-2">
-        <p className="font-semibold text-indigo-200">How buyers find you</p>
-        <p>Your hotspot appears as <strong className="text-white font-mono">{SSID_PREFIX}YourName</strong> in their WiFi settings. The branded prefix is added automatically so buyers can recognize leasable networks instantly.</p>
+      <div className="mb-6 space-y-2 rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-sm text-emerald-100">
+        <p className="font-semibold text-emerald-50">What judges will see</p>
+        <p>Your hotspot appears as <strong className="font-mono text-white">{SSID_PREFIX}YourName</strong>, blocks free roaming until payment clears, shows a Solana transaction proof, and leaves a portable Filecoin-style receipt trail in the dashboard.</p>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-4">
@@ -191,7 +199,7 @@ export default function HostPage() {
           />
         </Field>
 
-        <Field label="Price per minute (ETH)">
+        <Field label="Price per minute (SOL)">
           <input
             required
             type="number"
@@ -237,7 +245,16 @@ export default function HostPage() {
           <input
             value={form.host}
             onChange={set("host")}
-            placeholder="0xabc...1234"
+            placeholder="@cafenova"
+            className={inputCls}
+          />
+        </Field>
+
+        <Field label="Solana payout wallet" hint="Used by the captive portal and x402 payment challenges">
+          <input
+            value={form.hostWallet}
+            onChange={set("hostWallet")}
+            placeholder="4Nd1m...devnet"
             className={inputCls}
           />
         </Field>
@@ -249,7 +266,7 @@ export default function HostPage() {
         <button
           type="submit"
           disabled={phase === "submitting"}
-          className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold transition-colors"
+          className="w-full rounded-xl bg-emerald-400 py-3 font-semibold text-slate-950 transition-colors hover:bg-emerald-300 disabled:opacity-50"
         >
           {phase === "submitting" ? "Listing…" : "List My Hotspot"}
         </button>

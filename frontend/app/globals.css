@@ -1,14 +1,18 @@
 @import "tailwindcss";
 
 :root {
-  --background: #07070f;
-  --foreground: #e8e8f0;
+  --background: #07111b;
+  --foreground: #e8f0f7;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: 'Inter', system-ui, sans-serif;
+  font-family: "Segoe UI", "SF Pro Display", "Helvetica Neue", sans-serif;
+  background-image:
+    radial-gradient(circle at top left, rgba(34, 197, 94, 0.08), transparent 28%),
+    radial-gradient(circle at top right, rgba(14, 165, 233, 0.08), transparent 24%),
+    linear-gradient(180deg, #07111b 0%, #060b12 100%);
 }
 
 /* Subtle scrollbar */

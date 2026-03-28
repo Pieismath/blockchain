@@ -48,12 +48,21 @@ const RATE_PER_MIN = parseFloat(process.env.RATE_PER_MIN ?? "0.001"); // SOL per
 // ─── Solana config ─────────────────────────────────────────────────────────────
 const SOLANA_RPC    = process.env.SOLANA_RPC    ?? "https://api.devnet.solana.com";
 const SOLANA_WALLET = process.env.SOLANA_WALLET ?? null; // host's wallet (base58)
+const SOLANA_RPC_HOST = (() => {
+  try {
+    return new URL(SOLANA_RPC).hostname;
+  } catch {
+    return "api.devnet.solana.com";
+  }
+})();
+const DNS_ALLOWLIST = new Set([SOLANA_RPC_HOST]);
 
 // ─── Hotspot config (set by start.sh or env vars) ────────────────────────────
 // These are served to the captive portal page via GET /config
 const HOTSPOT_CONFIG = {
   name:            process.env.HOTSPOT_NAME     ?? "WiFi Hotspot",
   ssid:            process.env.HOTSPOT_SSID     ?? "⚡HDX-Hotspot",
+  listingId:       process.env.HOTSPOT_LISTING_ID ?? "local-hotspot",
   rate:            RATE_PER_MIN,
   currency:        "SOL",
   downloadMbps:    parseInt(process.env.HOTSPOT_DOWN ?? "100"),
@@ -62,6 +71,49 @@ const HOTSPOT_CONFIG = {
   location:        process.env.HOTSPOT_LOCATION ?? "",
   walletConfigured: !!SOLANA_WALLET,
 };
+
+async function fetchMarketplace() {
+  try {
+    const res = await fetch(`${CONTROL_API}/listings`);
+    if (!res.ok) throw new Error(`listing fetch failed: ${res.status}`);
+    const listings = await res.json();
+    if (Array.isArray(listings) && listings.length > 0) return listings;
+  } catch (err) {
+    console.warn("[Portal] Could not load listings from control API:", err.message);
+  }
+
+  return [
+    {
+      id: HOTSPOT_CONFIG.listingId,
+      name: HOTSPOT_CONFIG.name,
+      ssid: HOTSPOT_CONFIG.ssid,
+      location: HOTSPOT_CONFIG.location,
+      pricePerMinute: HOTSPOT_CONFIG.rate,
+      signalStrength: HOTSPOT_CONFIG.signalStrength,
+      status: "available",
+      host: "local-host",
+      hostIp: PORTAL_IP,
+      portalUrl: `http://${PORTAL_IP}:${HTTP_PORT}/`,
+      uploadMbps: HOTSPOT_CONFIG.uploadMbps,
+      downloadMbps: HOTSPOT_CONFIG.downloadMbps,
+      hostWallet: SOLANA_WALLET,
+      filecoin: {},
+      reputation: { reliabilityScore: 100, successfulSessions: 0, refunds: 0, disconnectRate: 0 },
+    },
+  ];
+}
+
+function challengeToSolanaPayUrl(accept) {
+  const amountSol = (Number(accept.amount || 0) / 1e9).toFixed(6);
+  const params = new URLSearchParams({
+    amount: amountSol,
+    label: "HotspotDEX",
+    message: accept.description || "Hotspot session purchase",
+    reference: accept.extra.reference,
+    memo: accept.memo || `hotspotdex:${accept.extra.reference}`,
+  });
+  return `solana:${accept.payTo}?${params.toString()}`;
+}
 
 /** Detect the Mac's IP on the shared bridge (Internet Sharing interface). */
 function detectPortalIP() {
@@ -205,7 +257,24 @@ app.use((req, res, next) => {
 
 // ── GET /config — serve hotspot info to the payment page ──────────────────────
 app.get("/config", (req, res) => {
-  res.json(HOTSPOT_CONFIG);
+  res.json({
+    ...HOTSPOT_CONFIG,
+    rpcHost: SOLANA_RPC_HOST,
+  });
+});
+
+app.get("/marketplace-data", async (_req, res) => {
+  const listings = await fetchMarketplace();
+  res.json({ listings });
+});
+
+app.get("/wallet-status", (req, res) => {
+  res.json({
+    walletConfigured: Boolean(SOLANA_WALLET),
+    provider: "phantom",
+    rpcHost: SOLANA_RPC_HOST,
+    connectionMode: "portal-only-rpc-allowlist",
+  });
 });
 
 // ── GET /payment-request?minutes=N ────────────────────────────────────────────
@@ -220,29 +289,57 @@ app.get("/payment-request", (req, res) => {
     });
   }
 
-  const ip      = clientIP(req);
+  const ip = clientIP(req);
   const minutes = parseInt(req.query.minutes, 10) || 10;
-  const amount  = (RATE_PER_MIN * minutes).toFixed(6); // SOL
-  const ref     = generateReference();
+  const listingId = req.query.listingId || HOTSPOT_CONFIG.listingId;
 
-  const params = new URLSearchParams({
-    amount,
-    label:     "HotspotDEX",
-    message:   `WiFi — ${HOTSPOT_CONFIG.ssid} — ${minutes} min`,
-    reference: ref,
-    memo:      `hdx-${minutes}min`,
-  });
-  const solanaPayUrl = `solana:${SOLANA_WALLET}?${params.toString()}`;
+  fetch(`${CONTROL_API}/x402/sessions/purchase`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ip,
+      listingId,
+      minutes,
+      tier: "standard",
+    }),
+  })
+    .then(async (challengeRes) => {
+      const challenge = await challengeRes.json();
+      if (challengeRes.status !== 402) {
+        throw new Error(challenge.error || `Unexpected status ${challengeRes.status}`);
+      }
 
-  pendingPayments.set(ref, { ip, minutes, created_at: Date.now(), activated: false });
+      const accept = challenge.accepts?.[0];
+      if (!accept) throw new Error("x402 challenge missing payment terms");
 
-  // Prune expired entries (> 10 min old)
-  for (const [key, val] of pendingPayments) {
-    if (Date.now() - val.created_at > 10 * 60 * 1000) pendingPayments.delete(key);
-  }
+      const ref = accept.extra.reference;
+      pendingPayments.set(ref, {
+        ip,
+        minutes,
+        listingId,
+        created_at: Date.now(),
+        activated: false,
+      });
 
-  console.log(`[Portal] Payment request: ${ip} ${minutes}min ${amount} SOL ref=${ref.slice(0, 8)}…`);
-  res.json({ url: solanaPayUrl, reference: ref, amount: parseFloat(amount), minutes });
+      for (const [key, val] of pendingPayments) {
+        if (Date.now() - val.created_at > 10 * 60 * 1000) pendingPayments.delete(key);
+      }
+
+      console.log(
+        `[Portal] x402 challenge: ${ip} ${minutes}min ${accept.amountDisplay} listing=${listingId} ref=${ref.slice(0, 8)}…`
+      );
+      res.json({
+        url: challengeToSolanaPayUrl(accept),
+        reference: ref,
+        amount: Number(accept.amount || 0) / 1e9,
+        minutes,
+        listingId,
+        challenge,
+      });
+    })
+    .catch((err) => {
+      res.status(500).json({ error: err.message });
+    });
 });
 
 // ── GET /payment-status?reference=<base58> ────────────────────────────────────
@@ -266,23 +363,35 @@ app.get("/payment-status", async (req, res) => {
     // Mark activated immediately to prevent double-processing
     pending.activated = true;
 
-    const { ip, minutes } = pending;
-    const session_id = uuidv4();
+    const { ip, minutes, listingId } = pending;
 
     // Open the firewall for this IP
     await pfAdd(ip);
 
-    // Register with the proxy control API (best-effort)
-    let sessionData = { session: { session_id, ip }, seconds_granted: minutes * 60 };
+    // Fulfill the same x402 payment challenge the agent flow uses.
+    let sessionData;
     try {
-      const r = await fetch(`${CONTROL_API}/sessions`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ip, session_id, minutes_purchased: minutes, tx_hash: sigInfo.signature }),
+      const r = await fetch(`${CONTROL_API}/x402/sessions/purchase`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Payment-Signature": sigInfo.signature,
+        },
+        body: JSON.stringify({
+          ip,
+          listingId,
+          minutes,
+          reference: ref,
+          tier: "standard",
+        }),
       });
-      if (r.ok) sessionData = await r.json();
-    } catch {
-      console.warn("[Portal] Control API unreachable — session tracked locally only");
+      sessionData = await r.json();
+      if (!r.ok) throw new Error(sessionData.error || `HTTP ${r.status}`);
+    } catch (error) {
+      paidIPs.delete(ip);
+      await pfRemove(ip);
+      pendingPayments.delete(ref);
+      return res.status(500).json({ error: error.message });
     }
 
     paidIPs.add(ip);
@@ -297,9 +406,13 @@ app.get("/payment-status", async (req, res) => {
 
     console.log(`[Portal] Payment confirmed ${ip} sig=${sigInfo.signature.slice(0, 10)}…`);
     res.json({
-      paid:            true,
-      session:         sessionData.session,
-      seconds_granted: sessionData.seconds_granted ?? minutes * 60,
+      paid: true,
+      session: sessionData.session,
+      seconds_granted: sessionData.session?.seconds_remaining || minutes * 60,
+      tx_hash: sigInfo.signature,
+      explorer_url:
+        sessionData.payment?.explorerUrl ||
+        `https://explorer.solana.com/tx/${sigInfo.signature}?cluster=devnet`,
     });
 
   } catch (err) {
@@ -398,8 +511,7 @@ app.post("/activate", async (req, res) => {
   }
 
   const session_id = uuidv4();
-  const tx_hash    = "0x" + Array.from({ length: 64 },
-    () => Math.floor(Math.random() * 16).toString(16)).join("");
+  const tx_hash    = generateReference();
 
   try {
     // 1. Open the firewall for this IP
@@ -409,7 +521,13 @@ app.post("/activate", async (req, res) => {
     const r = await fetch(`${CONTROL_API}/sessions`, {
       method:  "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ ip, session_id, minutes_purchased: minutes, tx_hash }),
+      body:    JSON.stringify({
+        ip,
+        session_id,
+        minutes_purchased: minutes,
+        tx_hash,
+        listing_id: HOTSPOT_CONFIG.listingId,
+      }),
     });
     if (!r.ok) throw new Error(`Control API: HTTP ${r.status}`);
     const data = await r.json();
@@ -453,10 +571,19 @@ app.post("/disconnect", async (req, res) => {
 
 // ── GET /status ───────────────────────────────────────────────────────────────
 // Payment page polls this to check if its IP is currently paid.
-app.get("/status", (req, res) => {
+app.get("/status", async (req, res) => {
   const ip   = clientIP(req);
   const paid = paidIPs.has(ip);
-  res.json({ ip, paid });
+  if (!paid) return res.json({ ip, paid });
+
+  try {
+    const response = await fetch(`${CONTROL_API}/sessions`);
+    const sessions = await response.json();
+    const session = sessions.find((item) => item.ip === ip && item.active);
+    res.json({ ip, paid, session: session || null });
+  } catch {
+    res.json({ ip, paid });
+  }
 });
 
 // ── Catch-all ────────────────────────────────────────────────────────────────
@@ -534,6 +661,14 @@ app.listen(HTTP_PORT, "0.0.0.0", () => {
 
 const { resolve4 } = require("dns");
 
+function isAllowedUnpaidHostname(name) {
+  const hostname = String(name || "").replace(/\.$/, "").toLowerCase();
+  for (const allowed of DNS_ALLOWLIST) {
+    if (hostname === allowed || hostname.endsWith(`.${allowed}`)) return true;
+  }
+  return false;
+}
+
 const dnsServer = dns2.createServer({
   udp: true,
   handle: (request, send, rinfo) => {
@@ -562,7 +697,7 @@ const dnsServer = dns2.createServer({
       }
     }
 
-    // ── Unpaid client → resolve everything to portal IP ──
+    // ── Unpaid client → resolve wallet/RPC hosts normally, everything else to portal ──
     for (const question of request.questions) {
       if (question.type === Packet.TYPE.AAAA) {
         // Return NXDOMAIN-style empty answer for IPv6 to force clients onto IPv4.
@@ -570,6 +705,30 @@ const dnsServer = dns2.createServer({
         // IPv6, bypassing pf redirect rules entirely.
         response.header.rcode = 3; // NXDOMAIN
         console.log(`[DNS] Blocking AAAA for ${question.name} from ${clientIP} → forcing IPv4`);
+      } else if (question.type === Packet.TYPE.A && isAllowedUnpaidHostname(question.name)) {
+        resolve4(question.name, (err, addresses) => {
+          if (!err && addresses && addresses.length) {
+            for (const addr of addresses) {
+              response.answers.push({
+                name: question.name,
+                type: Packet.TYPE.A,
+                class: Packet.CLASS.IN,
+                ttl: 60,
+                address: addr,
+              });
+            }
+          } else {
+            response.answers.push({
+              name: question.name,
+              type: Packet.TYPE.A,
+              class: Packet.CLASS.IN,
+              ttl: 10,
+              address: PORTAL_IP,
+            });
+          }
+          send(response);
+        });
+        return;
       } else {
         response.answers.push({
           name:    question.name,

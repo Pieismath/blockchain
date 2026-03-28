@@ -3,7 +3,12 @@
  * All functions return typed promises and throw on non-OK responses.
  */
 
-import type { ProxySession, EarlyExitResult, HotspotListing } from "./types";
+import type {
+  DashboardData,
+  ProxySession,
+  EarlyExitResult,
+  HotspotListing,
+} from "./types";
 
 /**
  * All API calls use relative /api/* paths so they work from any device
@@ -58,8 +63,17 @@ export function getHealth(): Promise<{
   status: string;
   active_sessions: number;
   uptime_seconds: number;
+  total_sessions?: number;
+  total_listings?: number;
+  x402_ready?: boolean;
+  filecoin_synapse_ready?: boolean;
 }> {
-  return apiFetch("http://localhost:3001/health");
+  return apiFetch("/api/health");
+}
+
+/** Aggregated host dashboard data. */
+export function getDashboard(): Promise<DashboardData> {
+  return apiFetch<DashboardData>("/api/dashboard");
 }
 
 /** Fetch all hotspot listings from the control API. */
@@ -77,6 +91,7 @@ export function createListing(payload: {
   downloadMbps: number;
   signalStrength: number;
   host: string;
+  hostWallet?: string;
   hostIp?: string;
 }): Promise<HotspotListing> {
   return apiFetch<HotspotListing>("/api/listings", {

@@ -5,6 +5,7 @@ node_modules/
 /tmp/
 cache/
 artifacts/
+proxy-server/data/*.json
 
 # TLS credentials
 captive-portal/tls.key

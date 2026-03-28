@@ -55,6 +55,55 @@
       line-height: 1.4;
     }
     .wifi-notice strong { color: var(--indigo); font-weight: 600; }
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 6px 12px;
+      border-radius: 999px;
+      background: rgba(248, 113, 113, 0.12);
+      color: #fecaca;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+      margin-bottom: 18px;
+    }
+    .wallet-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border-radius: 14px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      margin-bottom: 14px;
+    }
+    .wallet-meta {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.45;
+      margin-top: 3px;
+    }
+    .wallet-state { font-size: 13px; font-weight: 700; color: var(--text); }
+    .wallet-btn {
+      border: 1px solid rgba(99,102,241,0.25);
+      background: rgba(99,102,241,0.12);
+      color: #c7d2fe;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 10px 14px;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      white-space: nowrap;
+    }
+    .wallet-btn.secondary {
+      background: transparent;
+      color: var(--muted);
+      border-color: rgba(255,255,255,0.1);
+    }
 
     /* ── Card ──────────────────────────────────────────────────────────── */
     .card {
@@ -120,6 +169,42 @@
     @keyframes pulse {
       0%, 100% { opacity: 1; }
       50%       { opacity: 0.4; }
+    }
+
+    .listing-grid {
+      display: grid;
+      gap: 10px;
+    }
+    .listing-btn {
+      width: 100%;
+      text-align: left;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      background: rgba(255,255,255,0.03);
+      padding: 12px;
+      color: var(--text);
+      cursor: pointer;
+    }
+    .listing-btn.selected {
+      border-color: var(--indigo);
+      background: rgba(99,102,241,0.12);
+    }
+    .listing-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+    }
+    .listing-sub {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+    .listing-price {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--green);
+      white-space: nowrap;
     }
 
     /* ── Signal bars ──────────────────────────────────────────────────── */
@@ -384,17 +469,33 @@
     You connected to <strong id="ssid-label">WiFi</strong><br>
     Pay below to unlock internet access
   </div>
+  <div class="status-pill" id="status-pill">Unpaid</div>
 
   <!-- ═══════════ PAYMENT SCREEN ═══════════ -->
   <div id="payment-screen" style="width:100%;max-width:400px;">
 
+    <div class="card">
+      <div class="card-title">Mini Marketplace</div>
+      <div class="wallet-card">
+        <div>
+          <div class="wallet-state" id="wallet-state">Wallet ready via Phantom</div>
+          <div class="wallet-meta" id="wallet-meta">Only this portal and Solana devnet RPC remain reachable before payment.</div>
+        </div>
+        <button class="wallet-btn" id="wallet-btn" onclick="connectWallet()">Connect Wallet</button>
+      </div>
+      <div id="marketplace-list" class="listing-grid">
+        <div class="skeleton" style="height:64px;"></div>
+        <div class="skeleton" style="height:64px;"></div>
+      </div>
+    </div>
+
     <!-- Hotspot info -->
     <div class="card">
-      <div class="card-title">Hotspot Details</div>
+      <div class="card-title">Selected Hotspot</div>
       <div class="hotspot">
         <div class="hotspot-info">
           <h3 id="hs-name">Loading...</h3>
-          <p id="hs-meta">-- Mbps &middot; -- ETH / min</p>
+          <p id="hs-meta">-- Mbps &middot; -- SOL / min</p>
         </div>
         <div class="badge"><span class="badge-dot"></span> Live</div>
       </div>
@@ -435,11 +536,11 @@
     <div class="card">
       <div class="card-title">Summary</div>
       <div class="summary">
-        <div class="summary-row"><span>Rate</span><span id="sum-rate">-- ETH / min</span></div>
+        <div class="summary-row"><span>Rate</span><span id="sum-rate">-- SOL / min</span></div>
         <div class="summary-row"><span>Duration</span><span id="sum-dur">10 minutes</span></div>
         <div class="summary-row total">
           <span>Total</span>
-          <span class="val" id="sum-total">-- ETH</span>
+          <span class="val" id="sum-total">-- SOL</span>
         </div>
       </div>
     </div>
@@ -465,19 +566,11 @@
       <div class="waiting-icon">
         <span class="spinner" style="width:24px;height:24px;border-width:3px;margin:0;"></span>
       </div>
-      <div class="waiting-title">Waiting for Phantom&hellip;</div>
-      <div class="waiting-sub">
+      <div class="waiting-title" id="waiting-title">Waiting for Phantom&hellip;</div>
+      <div class="waiting-sub" id="waiting-sub">
         Approve the payment in Phantom, then come back here.<br>
         This page checks automatically.
       </div>
-      <a id="phantom-deep-link" href="#" class="open-phantom-btn">
-        <span class="phantom-pip">
-          <svg viewBox="0 0 128 128" fill="none">
-            <path d="M86 48H42a4 4 0 00-4 4v24a4 4 0 004 4h44a4 4 0 004-4V52a4 4 0 00-4-4zm-26 22a6 6 0 110-12 6 6 0 010 12z" fill="#1a0050"/>
-          </svg>
-        </span>
-        Open Phantom &rarr;
-      </a>
     </div>
     <button class="cancel-btn" onclick="cancelWaiting()">Cancel</button>
   </div>
@@ -508,6 +601,8 @@
       <div class="summary">
         <div class="summary-row"><span>Session ID</span><span id="sess-id" style="font-size:11px;font-family:monospace;"></span></div>
         <div class="summary-row"><span>Paid</span><span id="sess-paid" style="color:var(--green);"></span></div>
+        <div class="summary-row"><span>Solana tx</span><a id="sess-tx-link" href="#" target="_blank" rel="noreferrer" style="font-size:11px;font-family:monospace;color:#a5b4fc;text-decoration:none;">pending</a></div>
+        <div class="summary-row"><span>Filecoin receipt</span><span id="sess-cid" style="font-size:11px;font-family:monospace;color:#a5b4fc;">pending</span></div>
       </div>
     </div>
 
@@ -537,11 +632,11 @@
   </div>
 
   <div class="how-it-works" id="cna-hint" style="display:none;">
-    <strong>Tip:</strong> Tap below to open this page in Safari — required to launch Phantom for payment.
+    <strong>Tip:</strong> The iPhone captive browser can block wallet handoff. HotspotDEX will try Safari automatically when needed.
     <a id="safari-link" href="#"
        style="display:block;margin-top:8px;color:#818cf8;text-decoration:underline;font-weight:600;"
        onclick="window.open(this.href);return false;">
-      Open in Safari &rarr;
+      Continue in Safari &rarr;
     </a>
   </div>
 
@@ -563,6 +658,7 @@
       signalStrength: 4,
       location: '',
       walletConfigured: false,
+      rpcHost: 'api.devnet.solana.com',
     };
 
     var selectedMinutes = 10;
@@ -575,35 +671,146 @@
     var _payReq      = null;  // { url, reference, amount, minutes } from /payment-request
     var _pollTimer   = null;
     var _pollTimeout = null;
+    var MARKETPLACE  = [];
+    var selectedListingId = null;
+    var walletState = {
+      connected: false,
+      publicKey: null,
+      provider: 'phantom',
+    };
+    var uiState = {
+      isCna: false,
+      secureWalletOrigin: 'https://captive.apple.com/',
+      autoPayRequested: false,
+      activeReference: null,
+    };
+
+    var initialParams = new URLSearchParams(window.location.search);
+    var requestedListingId = initialParams.get('listingId');
+    var requestedMinutes = parseInt(initialParams.get('minutes') || '', 10);
+    var shouldAutoPay = initialParams.get('autopay') === '1';
 
     // ── Load hotspot config from server ───────────────────────────────
-    fetch('/config')
-      .then(function(r) { return r.json(); })
-      .then(function(data) { CFG = data; applyConfig(); })
-      .catch(function()    { applyConfig(); });
+    Promise.all([
+      fetch('/config').then(function(r) { return r.json(); }),
+      fetch('/marketplace-data').then(function(r) { return r.json(); }).catch(function() { return { listings: [] }; }),
+      fetch('/wallet-status').then(function(r) { return r.json(); }).catch(function() { return { provider: 'phantom' }; })
+    ])
+      .then(function(values) {
+        CFG = values[0];
+        MARKETPLACE = values[1].listings || [];
+        walletState.provider = values[2].provider || 'phantom';
+        applyConfig();
+        renderWalletStatus();
+        maybeAutoPay();
+      })
+      .catch(function() {
+        applyConfig();
+        renderWalletStatus();
+        maybeAutoPay();
+      });
+
+    function hasInjectedPhantom() {
+      return Boolean(window.phantom && window.phantom.solana && window.phantom.solana.isPhantom);
+    }
+
+    function isSecureWalletContext() {
+      return window.location.protocol === 'https:' || /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname);
+    }
+
+    function isCaptiveIosBrowser() {
+      return /iPhone|iPad/.test(navigator.userAgent) &&
+        window.innerHeight < 500 &&
+        !window.navigator.standalone;
+    }
+
+    function buildSecurePortalUrl(params) {
+      var url = new URL(uiState.secureWalletOrigin);
+      Object.keys(params || {}).forEach(function(key) {
+        if (params[key] !== undefined && params[key] !== null && params[key] !== '') {
+          url.searchParams.set(key, String(params[key]));
+        }
+      });
+      return url.toString();
+    }
+
+    function updateSafariHint(listingId, minutes) {
+      var safariLink = document.getElementById('safari-link');
+      if (!safariLink) return;
+      safariLink.href = buildSecurePortalUrl({
+        listingId: listingId || selectedListingId || CFG.listingId,
+        minutes: minutes || selectedMinutes,
+        autopay: 1,
+      });
+    }
+
+    function currentListing() {
+      var selected = MARKETPLACE.find(function(item) { return item.id === selectedListingId; });
+      if (selected) return selected;
+      return {
+        id: CFG.listingId,
+        name: CFG.name,
+        ssid: CFG.ssid,
+        location: CFG.location,
+        pricePerMinute: CFG.rate,
+        signalStrength: CFG.signalStrength,
+        durationOptions: [5, 10, 30],
+        hostWallet: null,
+        uploadMbps: CFG.uploadMbps,
+        downloadMbps: CFG.downloadMbps,
+        portalUrl: window.location.origin + '/',
+      };
+    }
+
+    function renderMarketplace() {
+      var root = document.getElementById('marketplace-list');
+      if (!root) return;
+
+      if (!MARKETPLACE.length) {
+        MARKETPLACE = [currentListing()];
+      }
+
+      if (!selectedListingId) {
+        selectedListingId = MARKETPLACE[0].id;
+      }
+
+      root.innerHTML = MARKETPLACE.map(function(listing) {
+        var selected = listing.id === selectedListingId ? ' selected' : '';
+        var badge = listing.real ? '<span style="color:#34d399;font-size:11px;">REAL</span>' :
+          (listing.demo ? '<span style="color:#fbbf24;font-size:11px;">DEMO</span>' : '');
+        var durations = (listing.durationOptions || [5,10,30]).join('/') + ' min';
+        return '' +
+          '<button class="listing-btn' + selected + '" onclick="selectListing(\'' + listing.id + '\')">' +
+            '<div class="listing-row">' +
+              '<strong>' + listing.name + ' ' + badge + '</strong>' +
+              '<span class="listing-price">' + listing.pricePerMinute + ' SOL/min</span>' +
+            '</div>' +
+            '<div class="listing-sub">' + (listing.location || 'Local hotspot') + ' · ' + (listing.ssid || 'Hotspot') + ' · ' + durations + '</div>' +
+          '</button>';
+      }).join('');
+    }
 
     function applyConfig() {
+      renderMarketplace();
+
+      if (requestedListingId && MARKETPLACE.some(function(item) { return item.id === requestedListingId; })) {
+        selectedListingId = requestedListingId;
+      }
+
+      refreshSelectedHotspot();
+      setPortalStatus('Unpaid');
+
       document.getElementById('ssid-label').textContent = CFG.ssid;
-      document.getElementById('hs-name').textContent    = CFG.name;
-      document.getElementById('hs-meta').textContent    =
-        CFG.downloadMbps + '/' + CFG.uploadMbps + ' Mbps \u00b7 ' + CFG.rate + ' SOL / min';
-      document.getElementById('hs-speed').textContent   = CFG.downloadMbps + '/' + CFG.uploadMbps;
 
       var bars = document.querySelectorAll('#signal-bars .bar');
-      for (var i = 0; i < bars.length; i++) {
-        if (i < CFG.signalStrength) bars[i].classList.add('active');
-      }
-      if (CFG.location) {
-        document.getElementById('hs-location').textContent = CFG.location;
-        document.getElementById('hs-location-wrap').style.display = '';
-      }
+      for (var i = 0; i < bars.length; i++) bars[i].classList.remove('active');
 
-      document.getElementById('price-5').textContent  = (CFG.rate * 5).toFixed(4)  + ' SOL';
-      document.getElementById('price-10').textContent = (CFG.rate * 10).toFixed(4) + ' SOL';
-      document.getElementById('price-30').textContent = (CFG.rate * 30).toFixed(4) + ' SOL';
-      document.getElementById('sum-rate').textContent = CFG.rate + ' SOL / min';
+      if (!Number.isNaN(requestedMinutes) && requestedMinutes > 0) {
+        selectedMinutes = requestedMinutes;
+      }
 
       selectDuration(selectedMinutes);
+      updateSafariHint(selectedListingId, selectedMinutes);
 
       // Show wallet-not-configured warning
       if (!CFG.walletConfigured) {
@@ -614,6 +821,106 @@
       }
     }
 
+    function renderWalletStatus() {
+      var stateEl = document.getElementById('wallet-state');
+      var metaEl = document.getElementById('wallet-meta');
+      var btnEl = document.getElementById('wallet-btn');
+      if (!stateEl || !metaEl || !btnEl) return;
+
+      if (walletState.connected && walletState.publicKey) {
+        stateEl.textContent = 'Wallet connected';
+        metaEl.textContent =
+          walletState.publicKey.slice(0, 6) + '…' + walletState.publicKey.slice(-4) +
+          ' · RPC allowlist: ' + CFG.rpcHost;
+        btnEl.textContent = 'Connected';
+        btnEl.disabled = true;
+        btnEl.style.opacity = '0.75';
+        btnEl.style.display = '';
+      } else if (hasInjectedPhantom() && isSecureWalletContext()) {
+        stateEl.textContent = 'Wallet available in Phantom';
+        metaEl.textContent = 'Secure wallet context active. Connect once, then pay with one tap.';
+        btnEl.textContent = 'Connect Wallet';
+        btnEl.disabled = false;
+        btnEl.style.opacity = '1';
+        btnEl.style.display = '';
+      } else {
+        stateEl.textContent = uiState.isCna ? 'Phantom launches during payment' : 'Wallet handoff happens during payment';
+        metaEl.textContent =
+          'Only this portal and ' + CFG.rpcHost + ' stay reachable before payment. ' +
+          (uiState.isCna ? 'HotspotDEX will move checkout into Safari if the captive browser blocks wallet launch.' :
+            'Tap Pay to open Phantom directly.');
+        btnEl.textContent = 'Connect Wallet';
+        btnEl.disabled = true;
+        btnEl.style.opacity = '0.55';
+        btnEl.style.display = 'none';
+      }
+    }
+
+    function connectWallet() {
+      if (hasInjectedPhantom() && isSecureWalletContext()) {
+        window.phantom.solana.connect()
+          .then(function(resp) {
+            walletState.connected = true;
+            walletState.publicKey = resp.publicKey.toString();
+            renderWalletStatus();
+          })
+          .catch(function(err) {
+            _showError('Wallet connection cancelled: ' + err.message);
+          });
+        return;
+      }
+
+      _showError('Phantom wallet injection is only available on secure pages. Tap Pay and HotspotDEX will handle the wallet handoff.');
+      renderWalletStatus();
+    }
+
+    function refreshSelectedHotspot() {
+      var listing = currentListing();
+      document.getElementById('ssid-label').textContent = listing.ssid || CFG.ssid;
+      document.getElementById('hs-name').textContent = listing.name || CFG.name;
+      document.getElementById('hs-meta').textContent =
+        listing.downloadMbps + '/' + listing.uploadMbps + ' Mbps \u00b7 ' + listing.pricePerMinute + ' SOL / min';
+      document.getElementById('hs-speed').textContent = listing.downloadMbps + '/' + listing.uploadMbps;
+      document.getElementById('sum-rate').textContent = listing.pricePerMinute + ' SOL / min';
+      document.getElementById('price-5').textContent  = (listing.pricePerMinute * 5).toFixed(4)  + ' SOL';
+      document.getElementById('price-10').textContent = (listing.pricePerMinute * 10).toFixed(4) + ' SOL';
+      document.getElementById('price-30').textContent = (listing.pricePerMinute * 30).toFixed(4) + ' SOL';
+
+      var bars = document.querySelectorAll('#signal-bars .bar');
+      for (var i = 0; i < bars.length; i++) {
+        bars[i].classList.toggle('active', i < (listing.signalStrength || CFG.signalStrength));
+      }
+
+      if (listing.location) {
+        document.getElementById('hs-location').textContent = listing.location;
+        document.getElementById('hs-location-wrap').style.display = '';
+      } else {
+        document.getElementById('hs-location-wrap').style.display = 'none';
+      }
+    }
+
+    function selectListing(listingId) {
+      selectedListingId = listingId;
+      renderMarketplace();
+      refreshSelectedHotspot();
+      selectDuration(selectedMinutes);
+      updateSafariHint(selectedListingId, selectedMinutes);
+    }
+
+    function setPortalStatus(label) {
+      var pill = document.getElementById('status-pill');
+      if (!pill) return;
+      pill.textContent = label;
+      pill.style.background =
+        label === 'Paid' ? 'rgba(52,211,153,0.12)' :
+        label === 'Pending' ? 'rgba(99,102,241,0.12)' :
+        'rgba(248,113,113,0.12)';
+      pill.style.color =
+        label === 'Paid' ? '#bbf7d0' :
+        label === 'Pending' ? '#c7d2fe' :
+        '#fecaca';
+    }
+
     // ── Duration selection ─────────────────────────────────────────────
     function selectDuration(min) {
       selectedMinutes = min;
@@ -621,10 +928,24 @@
         btn.classList.toggle('selected', parseInt(btn.dataset.min) === min);
       });
 
-      var cost = (CFG.rate * min).toFixed(4);
+      var listing = currentListing();
+      var options = listing.durationOptions || [5, 10, 30];
+      if (options.indexOf(min) === -1) {
+        min = options[0];
+        selectedMinutes = min;
+      }
+
+      [5, 10, 30].forEach(function(option) {
+        var btn = document.querySelector('.dur-btn[data-min="' + option + '"]');
+        if (!btn) return;
+        btn.style.display = options.indexOf(option) === -1 ? 'none' : '';
+      });
+
+      var cost = (listing.pricePerMinute * min).toFixed(4);
       document.getElementById('sum-dur').textContent   = min + ' minutes';
       document.getElementById('sum-total').textContent = cost + ' SOL';
       document.getElementById('pay-btn-text').textContent = 'Pay ' + cost + ' SOL with Phantom';
+      updateSafariHint(selectedListingId, min);
 
       // Pre-fetch a fresh payment request for this duration
       _prefetch(min);
@@ -632,61 +953,135 @@
 
     function _prefetch(minutes) {
       _payReq = null;
-      fetch('/payment-request?minutes=' + minutes)
+      updatePayButton(false, 'Preparing payment…');
+      var listing = currentListing();
+      fetch('/payment-request?minutes=' + minutes + '&listingId=' + encodeURIComponent(listing.id))
         .then(function(r) { return r.json(); })
-        .then(function(d) { if (!d.error) _payReq = d; })
-        .catch(function() {});
+        .then(function(d) {
+          if (!d.error) {
+            _payReq = d;
+            updatePayButton(true, 'Pay ' + (listing.pricePerMinute * minutes).toFixed(4) + ' SOL with Phantom');
+          } else {
+            updatePayButton(false, 'Payment unavailable');
+          }
+        })
+        .catch(function() {
+          updatePayButton(false, 'Payment unavailable');
+        });
+    }
+
+    function updatePayButton(ready, label) {
+      var btn = document.getElementById('pay-btn');
+      if (!btn) return;
+      btn.disabled = !ready;
+      document.getElementById('pay-btn-text').textContent = label;
+    }
+
+    function setWaitingCopy(title, body) {
+      var titleEl = document.getElementById('waiting-title');
+      var bodyEl = document.getElementById('waiting-sub');
+      if (titleEl) titleEl.textContent = title;
+      if (bodyEl) bodyEl.innerHTML = body;
+    }
+
+    function launchPhantom(req) {
+      uiState.activeReference = req.reference;
+      setWaitingCopy(
+        'Waiting for Phantom…',
+        'Approve the payment in Phantom, then come back here.<br>This page checks automatically.'
+      );
+      document.getElementById('payment-screen').style.display  = 'none';
+      document.getElementById('waiting-screen').style.display  = '';
+      setPortalStatus('Pending');
+      _startPolling(req.reference);
+      window.location.replace(req.url);
+    }
+
+    function startSafariHandoff() {
+      var listing = currentListing();
+      var safariUrl = buildSecurePortalUrl({
+        listingId: listing.id,
+        minutes: selectedMinutes,
+        autopay: 1,
+      });
+
+      document.getElementById('error-msg').style.display = 'none';
+      updateSafariHint(listing.id, selectedMinutes);
+      setWaitingCopy(
+        'Opening secure checkout…',
+        'The iPhone captive browser can block wallet launch.<br>HotspotDEX is moving payment into Safari automatically.'
+      );
+      document.getElementById('payment-screen').style.display  = 'none';
+      document.getElementById('waiting-screen').style.display  = '';
+      setPortalStatus('Pending');
+
+      var opened = window.open(safariUrl, '_blank');
+      if (!opened) {
+        cancelWaiting();
+        var hint = document.getElementById('cna-hint');
+        if (hint) hint.style.display = '';
+        _showError('Safari checkout was blocked. Use the Safari link below to continue payment.');
+        return;
+      }
+
+      setTimeout(function() {
+        if (!document.hidden) {
+          cancelWaiting();
+          var hint = document.getElementById('cna-hint');
+          if (hint) hint.style.display = '';
+          _showError('Secure checkout opened in Safari. Continue payment there if Phantom did not launch automatically.');
+        }
+      }, 1400);
+    }
+
+    function maybeAutoPay() {
+      if (!shouldAutoPay || uiState.autoPayRequested) return;
+      uiState.autoPayRequested = true;
+      window.history.replaceState({}, document.title, window.location.pathname);
+      setTimeout(function() {
+        handlePay({ auto: true });
+      }, 80);
     }
 
     // ── Phantom pay flow ──────────────────────────────────────────────
-    function handlePay() {
+    function handlePay(opts) {
+      opts = opts || {};
       document.getElementById('error-msg').style.display = 'none';
       var btn = document.getElementById('pay-btn');
-      btn.disabled = true;
+      if (!opts.auto) btn.disabled = true;
 
-      function _open(req) {
-        _payReq = req;
-        // Point "Open Phantom" link at the Solana Pay URL
-        document.getElementById('phantom-deep-link').href = req.url;
-
-        // Switch UI to waiting state
-        document.getElementById('payment-screen').style.display  = 'none';
-        document.getElementById('waiting-screen').style.display  = '';
-
-        // Navigate to Phantom via solana: deep link.
-        // iOS: Phantom opens; Safari tab stays on this page in the background.
-        // When user returns from Phantom, polling detects the confirmed tx.
-        window.location.href = req.url;
-
-        _startPolling(req.reference);
+      if (uiState.isCna && !opts.auto && !isSecureWalletContext()) {
+        startSafariHandoff();
+        btn.disabled = false;
+        return;
       }
 
       if (_payReq && _payReq.minutes === selectedMinutes) {
-        _open(_payReq);
+        launchPhantom(_payReq);
       } else {
-        // Pre-fetch wasn't ready — fetch now
-        // (window.open requires direct user-gesture context; we use location.href instead)
         document.getElementById('pay-btn-text').textContent = 'Preparing\u2026';
-        fetch('/payment-request?minutes=' + selectedMinutes)
+        var listing = currentListing();
+        fetch('/payment-request?minutes=' + selectedMinutes + '&listingId=' + encodeURIComponent(listing.id))
           .then(function(r) { return r.json(); })
           .then(function(d) {
             if (d.error) throw new Error(d.error);
-            _open(d);
+            launchPhantom(d);
           })
           .catch(function(err) {
             _showError('Could not prepare payment: ' + err.message);
             btn.disabled = false;
             document.getElementById('pay-btn-text').textContent =
-              'Pay ' + (CFG.rate * selectedMinutes).toFixed(4) + ' SOL with Phantom';
+              'Pay ' + (currentListing().pricePerMinute * selectedMinutes).toFixed(4) + ' SOL with Phantom';
           });
       }
     }
 
     function _startPolling(reference) {
+      uiState.activeReference = reference;
       if (_pollTimer)   clearInterval(_pollTimer);
       if (_pollTimeout) clearTimeout(_pollTimeout);
 
-      _pollTimer = setInterval(function() {
+      function checkStatus() {
         fetch('/payment-status?reference=' + encodeURIComponent(reference))
           .then(function(r) { return r.json(); })
           .then(function(d) {
@@ -694,11 +1089,18 @@
               clearInterval(_pollTimer);
               clearTimeout(_pollTimeout);
               _pollTimer = _pollTimeout = null;
+              uiState.activeReference = null;
               showSuccess(d);
             }
           })
           .catch(function() {});
+      }
+
+      _pollTimer = setInterval(function() {
+        checkStatus();
       }, 2000);
+
+      checkStatus();
 
       // Give up after 10 minutes
       _pollTimeout = setTimeout(function() {
@@ -706,6 +1108,7 @@
           clearInterval(_pollTimer);
           _pollTimer = null;
         }
+        uiState.activeReference = null;
         cancelWaiting();
         _showError('Payment timed out. Please try again.');
       }, 10 * 60 * 1000);
@@ -714,14 +1117,16 @@
     function cancelWaiting() {
       if (_pollTimer)   { clearInterval(_pollTimer);  _pollTimer   = null; }
       if (_pollTimeout) { clearTimeout(_pollTimeout); _pollTimeout = null; }
+      uiState.activeReference = null;
 
       document.getElementById('waiting-screen').style.display  = 'none';
       document.getElementById('payment-screen').style.display  = '';
+      setPortalStatus('Unpaid');
 
       var btn = document.getElementById('pay-btn');
       btn.disabled = false;
       document.getElementById('pay-btn-text').textContent =
-        'Pay ' + (CFG.rate * selectedMinutes).toFixed(4) + ' SOL with Phantom';
+        'Pay ' + (currentListing().pricePerMinute * selectedMinutes).toFixed(4) + ' SOL with Phantom';
 
       // Pre-fetch a fresh reference for the next attempt
       _prefetch(selectedMinutes);
@@ -732,12 +1137,17 @@
       document.getElementById('payment-screen').style.display  = 'none';
       document.getElementById('waiting-screen').style.display  = 'none';
       document.getElementById('success-screen').style.display  = 'block';
+      setPortalStatus('Paid');
 
       var session = data.session;
+      var listing = currentListing();
       document.getElementById('sess-id').textContent   = session.session_id.slice(0, 8) + '\u2026';
-      document.getElementById('sess-paid').textContent = (CFG.rate * selectedMinutes).toFixed(4) + ' SOL';
+      document.getElementById('sess-paid').textContent = (listing.pricePerMinute * selectedMinutes).toFixed(4) + ' SOL';
+      document.getElementById('sess-tx-link').textContent = (data.tx_hash || session.tx_hash || 'pending').slice(0, 12) + '\u2026';
+      document.getElementById('sess-tx-link').href = data.explorer_url || session.payment_explorer_url || '#';
+      document.getElementById('sess-cid').textContent = (session.filecoin && session.filecoin.latestCid) || 'pending';
       document.getElementById('success-sub').textContent =
-        selectedMinutes + ' min session on ' + CFG.ssid + ' \u2014 internet is open.';
+        selectedMinutes + ' min session on ' + (listing.ssid || CFG.ssid) + ' \u2014 internet is open, with an x402-verified payment proof and CID-backed log.';
 
       secondsLeft  = data.seconds_granted;
       totalSeconds = data.seconds_granted;
@@ -779,6 +1189,7 @@
     function showRefund(minutesUsed, refundAmount) {
       document.getElementById('success-screen').style.display = 'none';
       document.getElementById('refund-screen').style.display  = 'block';
+      setPortalStatus('Unpaid');
 
       document.getElementById('ref-used').textContent   = minutesUsed + ' min';
       document.getElementById('ref-amount').textContent = refundAmount.toFixed(6) + ' SOL';
@@ -805,7 +1216,21 @@
         if (d.paid) {
           document.getElementById('payment-screen').style.display = 'none';
           document.getElementById('success-screen').style.display = 'block';
+          setPortalStatus('Paid');
+          var session = d.session || {};
           document.getElementById('success-sub').textContent = 'You already have an active session.';
+          if (session.session_id) {
+            document.getElementById('sess-id').textContent = session.session_id.slice(0, 8) + '\u2026';
+          }
+          if (session.tx_hash) {
+            document.getElementById('sess-tx-link').textContent = session.tx_hash.slice(0, 12) + '\u2026';
+          }
+          if (session.payment_explorer_url) {
+            document.getElementById('sess-tx-link').href = session.payment_explorer_url;
+          }
+          if (session.filecoin && session.filecoin.latestCid) {
+            document.getElementById('sess-cid').textContent = session.filecoin.latestCid;
+          }
         }
       })
       .catch(function() {});
@@ -813,19 +1238,27 @@
     selectDuration(10);
 
     // ── Detect iOS Captive Network Assistant (CNA) ─────────────────────
-    // CNA is a limited WebKit view that can't open Phantom deep links.
-    // Show a hint to open in Safari first.
+    // CNA is a limited WebKit view, so wallet handoff may need Safari.
     (function() {
-      var isCNA = /iPhone|iPad/.test(navigator.userAgent) &&
-                  window.innerHeight < 500 &&
-                  !window.navigator.standalone;
-      if (isCNA) {
+      uiState.isCna = isCaptiveIosBrowser();
+      if (uiState.isCna) {
         var hint = document.getElementById('cna-hint');
         if (hint) hint.style.display = '';
       }
-      var safariLink = document.getElementById('safari-link');
-      if (safariLink) safariLink.href = window.location.href;
+      updateSafariHint(requestedListingId, requestedMinutes);
+      renderWalletStatus();
     })();
+
+    document.addEventListener('visibilitychange', function() {
+      if (!document.hidden && uiState.activeReference) {
+        fetch('/payment-status?reference=' + encodeURIComponent(uiState.activeReference))
+          .then(function(r) { return r.json(); })
+          .then(function(d) {
+            if (d.paid) showSuccess(d);
+          })
+          .catch(function() {});
+      }
+    });
   </script>
 </body>
 </html>

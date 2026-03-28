@@ -1,57 +1,11 @@
 "use client";
 
-/**
- * /dashboard — Host view
- *
- * Pulls live session data from the proxy control API every 5 seconds.
- * Shows:
- *   - Total earnings (hardcoded baseline + live sessions)
- *   - Active sessions list
- *   - Past session log cards (with mock Filecoin CIDs)
- */
+import { useEffect, useMemo, useState } from "react";
+import { getDashboard, getHealth } from "@/lib/api";
+import type { DashboardData, ProxySession } from "@/lib/types";
 
-import { useEffect, useState, useCallback } from "react";
-import type { ProxySession } from "@/lib/types";
-import { getSessions, getHealth } from "@/lib/api";
-
-// ─── Mock past sessions shown even before any live activity ──────────────────
-const MOCK_PAST_SESSIONS: MockSession[] = [
-  {
-    id: "ps-001",
-    buyer_ip: "192.168.1.42",
-    minutes: 30,
-    amount_earned: 0.3,
-    timestamp: "2026-03-25T14:22:00Z",
-    cid: "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
-  },
-  {
-    id: "ps-002",
-    buyer_ip: "10.0.0.17",
-    minutes: 10,
-    amount_earned: 0.1,
-    timestamp: "2026-03-25T11:05:00Z",
-    cid: "bafkreifjjcie6lypi6ny7amxnfftagclbuxndqonfipmr7yooeoy3zdhhq",
-  },
-  {
-    id: "ps-003",
-    buyer_ip: "172.16.0.8",
-    minutes: 5,
-    amount_earned: 0.05,
-    timestamp: "2026-03-24T08:44:00Z",
-    cid: "bafybeiczsscdsbs7ffqz55asqdf3smv6klcw3gofszvwlyarci47bgf354",
-  },
-];
-
-interface MockSession {
-  id: string;
-  buyer_ip: string;
-  minutes: number;
-  amount_earned: number;
-  timestamp: string;
-  cid: string; // mock Filecoin CIDv1 for session log
-}
-
-function fmtDate(iso: string) {
+function fmtDate(iso?: string | null) {
+  if (!iso) return "Pending";
   return new Date(iso).toLocaleString("en-US", {
     month: "short",
     day: "numeric",
@@ -60,214 +14,287 @@ function fmtDate(iso: string) {
   });
 }
 
-function fmtSeconds(s: number) {
-  const m = Math.floor(s / 60)
+function fmtTime(seconds: number) {
+  const m = Math.floor(seconds / 60)
     .toString()
     .padStart(2, "0");
-  const sec = (s % 60).toString().padStart(2, "0");
-  return `${m}:${sec}`;
+  const s = Math.max(0, seconds % 60)
+    .toString()
+    .padStart(2, "0");
+  return `${m}:${s}`;
+}
+
+function sessionLabel(session: ProxySession) {
+  return session.session_type === "agent"
+    ? "x402 API"
+    : "Captive portal";
 }
 
 export default function DashboardPage() {
-  const [sessions, setSessions] = useState<ProxySession[]>([]);
+  const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [health, setHealth] = useState<{
     status: string;
     active_sessions: number;
     uptime_seconds: number;
+    x402_ready?: boolean;
+    filecoin_synapse_ready?: boolean;
   } | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [proxyOnline, setProxyOnline] = useState(false);
-
-  const BASELINE_EARNED = 0.45; // hardcoded historical earnings
-
-  // ── Fetch sessions from proxy control API ──────────────────────────────────
-  const refresh = useCallback(async () => {
-    try {
-      const [s, h] = await Promise.all([getSessions(), getHealth()]);
-      setSessions(s);
-      setHealth(h);
-      setProxyOnline(true);
-    } catch {
-      setProxyOnline(false);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    refresh();
-    const interval = setInterval(refresh, 5000); // poll every 5 s
-    return () => clearInterval(interval);
-  }, [refresh]);
+    let mounted = true;
 
-  const activeSessions = sessions.filter((s) => s.active);
-  const liveEarned = activeSessions.reduce((acc, s) => {
-    const minutesConsumed =
-      s.minutes_purchased - s.seconds_remaining / 60;
-    return acc + minutesConsumed * 0.01;
-  }, 0);
-  const totalEarned = BASELINE_EARNED + liveEarned;
+    async function refresh() {
+      try {
+        const [dashboardData, healthData] = await Promise.all([
+          getDashboard(),
+          getHealth(),
+        ]);
+        if (!mounted) return;
+        setDashboard(dashboardData);
+        setHealth(healthData);
+        setError(null);
+      } catch (err) {
+        if (!mounted) return;
+        setError(err instanceof Error ? err.message : "Failed to load dashboard");
+      }
+    }
+
+    refresh();
+    const interval = window.setInterval(refresh, 5000);
+    return () => {
+      mounted = false;
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  const activeSessions = useMemo(
+    () => dashboard?.sessions.filter((session) => session.active) ?? [],
+    [dashboard]
+  );
+  const completedSessions = useMemo(
+    () => dashboard?.sessions.filter((session) => !session.active) ?? [],
+    [dashboard]
+  );
+  const topListing = dashboard?.listings[0];
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
-      {/* Page header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-white">Host Dashboard</h1>
-          <p className="text-slate-400 mt-1">
-            Manage your hotspot earnings and active sessions
-          </p>
+    <div className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
+      <div className="overflow-hidden rounded-[32px] border border-white/10 bg-[radial-gradient(circle_at_top_left,_rgba(34,197,94,0.2),_transparent_30%),radial-gradient(circle_at_top_right,_rgba(14,165,233,0.18),_transparent_35%),linear-gradient(180deg,#0b1220,#090d15)] px-6 py-8 shadow-[0_24px_80px_rgba(0,0,0,0.45)] sm:px-8">
+        <div className="flex flex-wrap items-start justify-between gap-6">
+          <div className="max-w-3xl">
+            <p className="text-xs uppercase tracking-[0.3em] text-emerald-200/70">
+              Host Dashboard
+            </p>
+            <h1 className="mt-3 text-4xl font-semibold tracking-tight text-white">
+              Proof, reputation, and live hotspot operations.
+            </h1>
+            <p className="mt-4 text-base leading-7 text-slate-300">
+              This view consolidates captive-portal sessions, x402 programmatic purchases, Solana payment proofs, and the latest CID-backed artifacts for judges.
+            </p>
+          </div>
+          <div className="rounded-2xl border border-white/8 bg-white/[0.05] px-4 py-3 text-sm text-slate-200">
+            <div>Proxy status: {health ? "online" : "loading"}</div>
+            <div className="mt-1 text-slate-400">
+              x402 {health?.x402_ready ? "ready" : "awaiting wallet"} · Filecoin{" "}
+              {health?.filecoin_synapse_ready ? "Synapse configured" : "local CID mode"}
+            </div>
+          </div>
         </div>
-        {/* Proxy status indicator */}
-        <div
-          className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border ${
-            proxyOnline
-              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
-              : "border-red-500/30 bg-red-500/10 text-red-400"
-          }`}
-        >
-          <span
-            className={`w-1.5 h-1.5 rounded-full ${
-              proxyOnline ? "bg-emerald-400 animate-pulse" : "bg-red-400"
-            }`}
-          />
-          Proxy {proxyOnline ? "online" : "offline"}
-          {health && ` · ${health.uptime_seconds}s uptime`}
-        </div>
-      </div>
 
-      {/* Stats row */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        {[
-          {
-            label: "Total earned",
-            value: `${totalEarned.toFixed(4)} ETH`,
-            color: "text-emerald-400",
-          },
-          {
-            label: "Active sessions",
-            value: activeSessions.length,
-            color: "text-indigo-400",
-          },
-          {
-            label: "Completed sessions",
-            value: MOCK_PAST_SESSIONS.length + (sessions.length - activeSessions.length),
-            color: "text-white",
-          },
-          {
-            label: "Proxy port",
-            value: ":8080",
-            color: "text-slate-300",
-          },
-        ].map((stat) => (
-          <div
-            key={stat.label}
-            className="bg-[#0f0f1a] border border-white/8 rounded-xl px-5 py-4"
-          >
-            <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
-            <p className="text-sm text-slate-500 mt-1">{stat.label}</p>
-          </div>
-        ))}
-      </div>
-
-      {/* ── Active sessions ──────────────────────────────────────────────────── */}
-      <section>
-        <h2 className="text-lg font-semibold text-white mb-3">
-          Active Sessions
-          <span className="ml-2 text-sm text-indigo-400 font-normal">
-            (auto-refreshes every 5s)
-          </span>
-        </h2>
-
-        {loading ? (
-          <div className="text-slate-500 text-sm">Loading…</div>
-        ) : activeSessions.length === 0 ? (
-          <div className="bg-[#0f0f1a] border border-white/8 rounded-xl p-6 text-center text-slate-500 text-sm">
-            No active sessions right now.{" "}
-            {!proxyOnline && "Start the proxy server first."}
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {activeSessions.map((s) => (
-              <div
-                key={s.session_id}
-                className="bg-[#0f0f1a] border border-emerald-500/20 rounded-xl px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-              >
-                <div className="flex items-center gap-3">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  <div>
-                    <div className="text-white font-mono text-sm">
-                      {s.ip}
-                    </div>
-                    <div className="text-slate-500 text-xs mt-0.5">
-                      Session {s.session_id.slice(0, 8)}… · tx:{" "}
-                      {s.tx_hash ? s.tx_hash.slice(0, 10) + "…" : "mock"}
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-6 text-sm">
-                  <div>
-                    <span className="text-slate-400">Remaining </span>
-                    <span className="font-mono text-white">
-                      {fmtSeconds(s.seconds_remaining)}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-slate-400">Purchased </span>
-                    <span className="text-white">{s.minutes_purchased} min</span>
-                  </div>
-                  <div className="text-emerald-400 font-semibold">
-                    +{(s.minutes_purchased * 0.01).toFixed(3)} ETH
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* ── Session log ──────────────────────────────────────────────────────── */}
-      <section>
-        <h2 className="text-lg font-semibold text-white mb-3">
-          Session Log
-          <span className="ml-2 text-xs text-slate-500 font-normal">
-            Filecoin CIDs are mock — real storage integration coming soon
-          </span>
-        </h2>
-
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {MOCK_PAST_SESSIONS.map((ps) => (
+        <div className="mt-8 grid gap-4 sm:grid-cols-4">
+          {[
+            {
+              label: "Earned",
+              value: `${dashboard?.summary.totalEarnedSol.toFixed(4) || "0.0000"} SOL`,
+            },
+            {
+              label: "Active sessions",
+              value: dashboard?.summary.activeSessions ?? 0,
+            },
+            {
+              label: "Completed sessions",
+              value: dashboard?.summary.completedSessions ?? 0,
+            },
+            {
+              label: "Refunds",
+              value: dashboard?.summary.refunds ?? 0,
+            },
+          ].map((card) => (
             <div
-              key={ps.id}
-              className="bg-[#0f0f1a] border border-white/8 rounded-xl p-5 space-y-3"
+              key={card.label}
+              className="rounded-2xl border border-white/8 bg-white/[0.04] px-5 py-4"
             >
-              <div className="flex justify-between items-start">
-                <div>
-                  <div className="text-white font-mono text-sm">{ps.buyer_ip}</div>
-                  <div className="text-slate-500 text-xs mt-0.5">
-                    {fmtDate(ps.timestamp)}
-                  </div>
-                </div>
-                <span className="bg-slate-700 text-slate-300 text-xs px-2 py-1 rounded-lg">
-                  {ps.minutes} min
-                </span>
-              </div>
-
-              <div className="text-emerald-400 font-bold text-lg">
-                +{ps.amount_earned.toFixed(3)} ETH
-              </div>
-
-              {/* Mock Filecoin CID */}
-              <div className="bg-white/3 rounded-lg p-2 border border-white/5">
-                <div className="text-xs text-slate-500 mb-1">Filecoin CID</div>
-                <div className="text-xs font-mono text-indigo-300 break-all">
-                  {ps.cid}
-                </div>
-              </div>
+              <div className="text-2xl font-semibold text-white">{card.value}</div>
+              <div className="mt-1 text-sm text-slate-500">{card.label}</div>
             </div>
           ))}
         </div>
-      </section>
+      </div>
+
+      {error && (
+        <div className="mt-6 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          {error}
+        </div>
+      )}
+
+      <div className="mt-8 grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+        <section className="space-y-6">
+          <div className="rounded-[28px] border border-white/8 bg-[#0d1420] p-6">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold text-white">Live Sessions</h2>
+              <span className="text-xs uppercase tracking-[0.24em] text-slate-500">
+                Refreshes every 5s
+              </span>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {activeSessions.length === 0 ? (
+                <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-5 text-sm text-slate-400">
+                  No active sessions yet. Run the captive portal or x402 agent demo to populate this table.
+                </div>
+              ) : (
+                activeSessions.map((session) => (
+                  <div
+                    key={session.session_id}
+                    className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 p-4"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-4">
+                      <div>
+                        <div className="text-sm font-semibold text-white">
+                          {sessionLabel(session)} · {session.ip}
+                        </div>
+                        <div className="mt-1 text-xs text-emerald-100/75">
+                          Tx {session.tx_hash?.slice(0, 12)}... · CID{" "}
+                          {session.filecoin.latestCid?.slice(0, 16)}...
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-mono text-2xl text-white">
+                          {fmtTime(session.seconds_remaining)}
+                        </div>
+                        <div className="text-xs uppercase tracking-[0.22em] text-emerald-100/70">
+                          Remaining
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-[28px] border border-white/8 bg-[#0d1420] p-6">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold text-white">Recent Closeouts</h2>
+              <span className="text-sm text-slate-500">
+                {completedSessions.length} archived session{completedSessions.length === 1 ? "" : "s"}
+              </span>
+            </div>
+
+            <div className="mt-4 overflow-hidden rounded-2xl border border-white/8">
+              <table className="min-w-full divide-y divide-white/8 text-sm">
+                <thead className="bg-white/[0.03] text-left text-slate-400">
+                  <tr>
+                    <th className="px-4 py-3 font-medium">Type</th>
+                    <th className="px-4 py-3 font-medium">Ended</th>
+                    <th className="px-4 py-3 font-medium">Tx</th>
+                    <th className="px-4 py-3 font-medium">CID</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/8 bg-[#091019] text-slate-200">
+                  {completedSessions.slice(0, 6).map((session) => (
+                    <tr key={session.session_id}>
+                      <td className="px-4 py-3">{sessionLabel(session)}</td>
+                      <td className="px-4 py-3">{fmtDate(session.ended_at || session.paid_until)}</td>
+                      <td className="px-4 py-3 font-mono text-xs">
+                        {session.tx_hash ? `${session.tx_hash.slice(0, 12)}...` : "Pending"}
+                      </td>
+                      <td className="px-4 py-3 font-mono text-xs">
+                        {session.filecoin.latestCid
+                          ? `${session.filecoin.latestCid.slice(0, 18)}...`
+                          : "Pending"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <aside className="space-y-6">
+          <div className="rounded-[28px] border border-white/8 bg-[#0d1420] p-6">
+            <h2 className="text-lg font-semibold text-white">Hotspot Reputation</h2>
+            <div className="mt-4 space-y-3 text-sm text-slate-300">
+              <Metric label="Listing" value={topListing?.name || "Local hotspot"} />
+              <Metric
+                label="Reliability score"
+                value={`${topListing?.reputation?.reliabilityScore ?? 100}%`}
+              />
+              <Metric
+                label="Successful sessions"
+                value={String(topListing?.reputation?.successfulSessions ?? 0)}
+              />
+              <Metric label="Refunds" value={String(topListing?.reputation?.refunds ?? 0)} />
+              <Metric
+                label="Reputation CID"
+                value={topListing?.filecoin?.latestReputationCid || "Pending"}
+                mono
+              />
+            </div>
+          </div>
+
+          <div className="rounded-[28px] border border-white/8 bg-[#0d1420] p-6">
+            <h2 className="text-lg font-semibold text-white">Recent Artifacts</h2>
+            <div className="mt-4 space-y-3">
+              {(dashboard?.recentArtifacts || []).map((artifact) => (
+                <div
+                  key={`${artifact.sessionId}-${artifact.cid}`}
+                  className="rounded-2xl border border-white/8 bg-white/[0.03] p-4 text-sm"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-medium text-white">{artifact.kind}</span>
+                    <span className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                      {artifact.synapse?.uploaded ? "Synapse uploaded" : "CID ready"}
+                    </span>
+                  </div>
+                  <div className="mt-2 font-mono text-xs text-sky-200">{artifact.cid}</div>
+                  <div className="mt-2 text-xs text-slate-500">{fmtDate(artifact.createdAt)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-[28px] border border-sky-500/20 bg-sky-500/10 p-6">
+            <h2 className="text-lg font-semibold text-white">Judge Notes</h2>
+            <div className="mt-3 space-y-2 text-sm text-sky-50/85">
+              <p>Human traffic remains blocked at the proxy and pf layer until payment verification succeeds.</p>
+              <p>Agent traffic uses HTTP 402 on the x402 endpoint before access or extension is granted.</p>
+              <p>Session receipts and reputation objects are persisted as CID-backed artifacts for portability.</p>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function Metric({
+  label,
+  value,
+  mono = false,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <span className="text-slate-500">{label}</span>
+      <span className={mono ? "max-w-[60%] break-all font-mono text-xs text-white" : "text-white"}>
+        {value}
+      </span>
     </div>
   );
 }

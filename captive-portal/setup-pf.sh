@@ -25,18 +25,42 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
+SOLANA_RPC_URL="${SOLANA_RPC:-https://api.devnet.solana.com}"
+RPC_HOST="$(printf '%s\n' "$SOLANA_RPC_URL" | sed -E 's#^[a-zA-Z]+://([^/:]+).*#\1#')"
+ALLOW_HOSTS="${RPC_HOST:-api.devnet.solana.com}"
+ALLOW_IPS=""
+
+echo "Resolving wallet/RPC allowlist..."
+for host in $(printf '%s\n' "$ALLOW_HOSTS" | tr ',' ' '); do
+  [ -n "$host" ] || continue
+  echo "  allow $host"
+  resolved=$(dscacheutil -q host -a name "$host" 2>/dev/null | awk '/ip_address:/{print $2}' | sort -u || true)
+  if [ -z "$resolved" ]; then
+    resolved=$(dig +short "$host" A 2>/dev/null | sort -u || true)
+  fi
+  if [ -n "$resolved" ]; then
+    while IFS= read -r ip; do
+      [ -n "$ip" ] || continue
+      ALLOW_IPS="${ALLOW_IPS}${ALLOW_IPS:+, }$ip"
+    done <<EOF
+$resolved
+EOF
+  fi
+done
+
 # ── Detect interface and IP ───────────────────────────────────────────────────
 
 BRIDGE=""
 PORTAL_IP=""
 FALLBACK_BRIDGE=""
 FALLBACK_IP=""
+FALLBACK_SCORE=-1
 
 echo "Scanning network interfaces..."
 
 # Prefer the active Internet Sharing bridge. Some Macs keep older inactive
 # bridge interfaces around, and picking the first one breaks the captive rules.
-for iface in bridge100 bridge101 bridge0 $(ifconfig -l 2>/dev/null | tr ' ' '\n' | grep '^bridge' | sort); do
+for iface in $(printf '%s\n' bridge100 bridge101 bridge0 $(ifconfig -l 2>/dev/null | tr ' ' '\n' | grep '^bridge' | sort) | awk '!seen[$0]++'); do
   [ -n "$iface" ] || continue
 
   info=$(ifconfig "$iface" 2>/dev/null || true)
@@ -44,12 +68,17 @@ for iface in bridge100 bridge101 bridge0 $(ifconfig -l 2>/dev/null | tr ' ' '\n'
 
   ip=$(printf '%s\n' "$info" | awk '/inet /{print $2; exit}')
   status=$(printf '%s\n' "$info" | awk '/status:/{print $2; exit}')
+  has_ap1=$(printf '%s\n' "$info" | grep -c 'member: ap1' || true)
+  score=0
+  [ "$iface" = "bridge100" ] && score=$((score + 3))
+  [ "$has_ap1" -gt 0 ] && score=$((score + 5))
 
   echo "  $iface → ${ip:-no IP} (${status:-unknown})"
 
-  if [ -n "$ip" ] && [ -z "$FALLBACK_BRIDGE" ]; then
+  if [ -n "$ip" ] && [ "$score" -gt "$FALLBACK_SCORE" ]; then
     FALLBACK_BRIDGE="$iface"
     FALLBACK_IP="$ip"
+    FALLBACK_SCORE="$score"
   fi
 
   if [ -n "$ip" ] && [ "$status" = "active" ]; then
@@ -114,6 +143,18 @@ echo "Written: $NAT_ANCHOR"
 
 FILTER_ANCHOR="/etc/pf.anchors/hotspotdex"
 
+WALLET_TABLE=""
+WALLET_RULES=""
+if [ -n "$ALLOW_IPS" ]; then
+  WALLET_TABLE="table <wallet_allow_hosts> const { $ALLOW_IPS }"
+  WALLET_RULES=$(cat <<EOF
+# Allow only Solana payment RPC connectivity for unpaid users.
+pass quick inet proto tcp from <hotspot_net> to <wallet_allow_hosts> port 443 keep state
+pass quick inet proto udp from <hotspot_net> to <wallet_allow_hosts> port 443 keep state
+EOF
+)
+fi
+
 cat > "$FILTER_ANCHOR" << EOF
 # HotspotDEX filter anchor
 #
@@ -122,6 +163,7 @@ cat > "$FILTER_ANCHOR" << EOF
 table <allowed_clients> persist
 table <portal_host>     const { $PORTAL_IP }
 table <hotspot_net>     const { $HOTSPOT_SUBNET }
+$WALLET_TABLE
 
 # Allow DHCP so devices can get an IP address
 pass in quick on $BRIDGE proto udp from <hotspot_net> port 68 to any port 67 keep state
@@ -134,6 +176,7 @@ block drop quick inet6 from any to <hotspot_net>
 # These rules are the only unpaid paths out of the hotspot network.
 pass quick inet proto tcp from <hotspot_net> to <portal_host> port { 8443, 8888, 3001, 3000 } keep state
 pass quick inet proto udp from <hotspot_net> to <portal_host> port 5300 keep state
+$WALLET_RULES
 
 # Allow paid clients full outbound internet
 pass quick inet from <allowed_clients> to any keep state
