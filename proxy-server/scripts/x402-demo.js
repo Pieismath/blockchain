@@ -56,18 +56,23 @@ async function payChallenge({ payTo, amount, extra, memo }, payer) {
   const recipient = new PublicKey(payTo);
   const latestBlockhash = await connection.getLatestBlockhash("confirmed");
 
+  const transferIx = SystemProgram.transfer({
+    fromPubkey: payer.publicKey,
+    toPubkey: recipient,
+    lamports: Number(amount),
+  });
+  // Put the x402 reference on the transfer instruction so it shows up in the
+  // transaction account keys without triggering Memo program signer checks.
+  transferIx.keys.push({ pubkey: reference, isSigner: false, isWritable: false });
+
   const tx = new Transaction({
     feePayer: payer.publicKey,
     blockhash: latestBlockhash.blockhash,
     lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
   }).add(
-    SystemProgram.transfer({
-      fromPubkey: payer.publicKey,
-      toPubkey: recipient,
-      lamports: Number(amount),
-    }),
+    transferIx,
     new TransactionInstruction({
-      keys: [{ pubkey: reference, isSigner: false, isWritable: false }],
+      keys: [],
       programId: MEMO_PROGRAM_ID,
       data: Buffer.from(memo || `netra:${extra.reference}`),
     })
