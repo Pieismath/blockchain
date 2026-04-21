@@ -8,6 +8,7 @@
 import { LISTINGS as FALLBACK_LISTINGS } from "@/lib/listings";
 import type { HotspotListing } from "@/lib/types";
 import HotspotCard from "@/components/HotspotCard";
+import { CONTROL_API } from "@/lib/control";
 
 export const metadata = {
   title: "Marketplace — Netra",
@@ -15,14 +16,15 @@ export const metadata = {
 
 async function fetchListings(): Promise<HotspotListing[]> {
   try {
-    const res = await fetch("http://localhost:3001/listings", {
+    const res = await fetch(`${CONTROL_API}/listings`, {
       cache: "no-store",
     });
-    if (!res.ok) throw new Error("API error");
+    if (!res.ok) throw new Error(`control API returned ${res.status}`);
     const live: HotspotListing[] = await res.json();
-    if (live.length === 0) return FALLBACK_LISTINGS;
+    if (!Array.isArray(live) || live.length === 0) return FALLBACK_LISTINGS;
     return live;
-  } catch {
+  } catch (error) {
+    console.warn("[marketplace] falling back to demo listings:", error);
     return FALLBACK_LISTINGS;
   }
 }

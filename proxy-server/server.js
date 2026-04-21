@@ -9,12 +9,33 @@
 "use strict";
 
 const http = require("http");
+const net = require("net");
 const path = require("path");
 const { execSync } = require("child_process");
 
 const cors = require("cors");
 const express = require("express");
 const httpProxy = require("http-proxy");
+
+function parseConnectTarget(rawUrl) {
+  // CONNECT URLs look like host:port, ipv4:port, or [ipv6]:port.
+  if (!rawUrl) return null;
+  if (rawUrl.startsWith("[")) {
+    const close = rawUrl.indexOf("]");
+    if (close < 0) return null;
+    const host = rawUrl.slice(1, close);
+    const rest = rawUrl.slice(close + 1);
+    const port = rest.startsWith(":") ? Number(rest.slice(1)) : 443;
+    if (!host || !Number.isFinite(port)) return null;
+    return { host, port };
+  }
+  const lastColon = rawUrl.lastIndexOf(":");
+  if (lastColon < 0) return { host: rawUrl, port: 443 };
+  const host = rawUrl.slice(0, lastColon);
+  const port = Number(rawUrl.slice(lastColon + 1));
+  if (!host || !Number.isFinite(port)) return null;
+  return { host, port };
+}
 
 const { createHotspotService, normalizeIp } = require("./lib/hotspot-service");
 
@@ -141,15 +162,25 @@ proxyServer.on("connect", (req, clientSocket, head) => {
   }
 
   console.log(`[${ts()}] ${ip} | ALLOWED (CONNECT) | ${req.url}`);
-  const [host, port] = req.url.split(":");
-  const net = require("net");
-  const serverSocket = net.connect(parseInt(port || "443", 10), host, () => {
+  const target = parseConnectTarget(req.url);
+  if (!target) {
+    clientSocket.end("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
+    return;
+  }
+
+  const serverSocket = net.connect(target.port, target.host, () => {
     clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
     serverSocket.write(head);
     serverSocket.pipe(clientSocket);
     clientSocket.pipe(serverSocket);
   });
-  serverSocket.on("error", () => clientSocket.destroy());
+  serverSocket.on("error", (error) => {
+    console.error(`[${ts()}] CONNECT upstream error (${target.host}:${target.port}): ${error.message}`);
+    if (!clientSocket.destroyed) {
+      clientSocket.end("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
+    }
+  });
+  clientSocket.on("error", () => serverSocket.destroy());
 });
 
 proxyServer.listen(PROXY_PORT, () => {

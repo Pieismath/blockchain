@@ -290,6 +290,38 @@ const captiveReleasedIPs = new Set();
 const pendingPayments = new Map();
 const portalDebugEvents = [];
 
+/**
+ * Active per-IP expiry timers. Extending a session for the same IP must
+ * cancel the old timer first — otherwise the original expiry fires and
+ * yanks firewall access mid-session.
+ */
+const sessionTimers = new Map(); // ip → { timer, expiresAt }
+
+function scheduleSessionExpiry(ip, durationMs) {
+  const previous = sessionTimers.get(ip);
+  if (previous) clearTimeout(previous.timer);
+
+  const expiresAt = Date.now() + durationMs;
+  const timer = setTimeout(async () => {
+    const current = sessionTimers.get(ip);
+    if (!current || current.timer !== timer) return; // superseded
+    sessionTimers.delete(ip);
+    paidIPs.delete(ip);
+    captiveReleasedIPs.delete(ip);
+    await pfRemove(ip);
+    console.log(`[Portal] Session expired for ${ip}`);
+  }, durationMs);
+
+  sessionTimers.set(ip, { timer, expiresAt });
+}
+
+function cancelSessionExpiry(ip) {
+  const entry = sessionTimers.get(ip);
+  if (!entry) return;
+  clearTimeout(entry.timer);
+  sessionTimers.delete(ip);
+}
+
 // ─── Solana Pay helpers ───────────────────────────────────────────────────────
 
 /** Generate a random 32-byte base58 public key to use as a Solana Pay reference. */
@@ -678,13 +710,7 @@ async function fulfillPendingPayment({ reference, signature, buyerWallet }) {
       const CAPTIVE_GRACE_MS = 8000;
       setTimeout(() => captiveReleasedIPs.add(ip), CAPTIVE_GRACE_MS);
 
-      setTimeout(async () => {
-        paidIPs.delete(ip);
-        captiveReleasedIPs.delete(ip);
-        await pfRemove(ip);
-        pendingPayments.delete(reference);
-        console.log(`[Portal] Session expired for ${ip}`);
-      }, minutes * 60 * 1000 + CAPTIVE_GRACE_MS);
+      scheduleSessionExpiry(ip, minutes * 60 * 1000 + CAPTIVE_GRACE_MS);
 
       return payload;
     } catch (error) {
@@ -1000,13 +1026,10 @@ app.post("/activate", async (req, res) => {
     const CAPTIVE_GRACE_MS = 8000;
     setTimeout(() => captiveReleasedIPs.add(ip), CAPTIVE_GRACE_MS);
 
-    // 4. Auto-expire: close firewall when session time runs out
-    setTimeout(async () => {
-      paidIPs.delete(ip);
-      captiveReleasedIPs.delete(ip);
-      await pfRemove(ip);
-      console.log(`[Portal] Session expired for ${ip}`);
-    }, minutes * 60 * 1000 + CAPTIVE_GRACE_MS);
+    // 4. Auto-expire: close firewall when session time runs out.
+    //    scheduleSessionExpiry() cancels any prior timer for this IP first,
+    //    so back-to-back activations don't revoke access early.
+    scheduleSessionExpiry(ip, minutes * 60 * 1000 + CAPTIVE_GRACE_MS);
 
     console.log(`[Portal] Activated ${minutes} min session for ${ip} (tx: ${tx_hash.slice(0, 10)}…)`);
     res.json({ ok: true, session: data.session, seconds_granted: data.seconds_granted });
@@ -1024,16 +1047,19 @@ app.post("/activate", async (req, res) => {
 // ── POST /disconnect ──────────────────────────────────────────────────────────
 app.post("/disconnect", async (req, res) => {
   const ip = clientIP(req);
+  cancelSessionExpiry(ip);
   paidIPs.delete(ip);
   captiveReleasedIPs.delete(ip);
   await pfRemove(ip);
 
   try {
-    const r    = await fetch(`${CONTROL_API}/sessions/${encodeURIComponent(ip)}`, { method: "DELETE" });
-    const data = await r.json();
-    res.json(data);
+    const r = await fetch(`${CONTROL_API}/sessions/${encodeURIComponent(ip)}`, {
+      method: "DELETE",
+    });
+    const data = await r.json().catch(() => ({}));
+    res.status(r.status).json(data);
   } catch (err) {
-    res.json({ error: err.message });
+    res.status(502).json({ error: "control_api_unreachable", message: err.message });
   }
 });
 
